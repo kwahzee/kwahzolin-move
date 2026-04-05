@@ -1,0 +1,38 @@
+{
+  "id": "kwahzolin",
+  "name": "Kwahzolin",
+  "abbrev": "KW",
+  "version": "0.1.0",
+  "capabilities": {
+    "chainable": true,
+    "component_type": "sound_generator",
+    "claims_master_knob": false,
+    "ui_hierarchy": {
+      "levels": {
+        "root": {
+          "name": "Kwahzolin",
+          "knobs": [
+            "osc1_rate",
+            "osc2_rate",
+            "chaos",
+            "cutoff",
+            "resonance",
+            "drive",
+            "rungler_mod",
+            "ring_mod"
+          ],
+          "params": [
+            { "key": "osc1_rate",   "label": "Osc1 Rate"   },
+            { "key": "osc2_rate",   "label": "Osc2 Rate"   },
+            { "key": "chaos",       "label": "Chaos"        },
+            { "key": "cutoff",      "label": "Cutoff"       },
+            { "key": "resonance",   "label": "Resonance"    },
+            { "key": "drive",       "label": "Drive"        },
+            { "key": "rungler_mod", "label": "Rungler Mod"  },
+            { "key": "ring_mod",    "label": "Ring Mod"     }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,27 @@
+# Default behavior
+* text=auto
+
+# Shell scripts - always LF
+*.sh text eol=lf
+
+# C source files - always LF
+*.c text eol=lf
+*.h text eol=lf
+
+# Windows-specific files - always CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# JSON, JS, and other text files - normalize to LF
+*.json text eol=lf
+*.js text eol=lf
+*.md text eol=lf
+
+# Binaries - no line ending conversion
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.gz binary
+*.zip binary
