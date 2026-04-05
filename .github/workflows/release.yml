@@ -54,6 +54,8 @@ jobs:
         run: |
           git config user.email "github-actions@github.com"
           git config user.name  "GitHub Actions"
+          git fetch origin main
+          git checkout main
           git add release.json
           git diff --staged --quiet || git commit -m "release: update release.json for v${GITHUB_REF#refs/tags/v}"
-          git push origin HEAD:main
+          git push origin main
