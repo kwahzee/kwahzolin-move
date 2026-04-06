@@ -38,31 +38,30 @@
 
 ## filter
 
-two integrators in cascade, feedback saturated through hyperbolic tangent so it cannot blow apart. at low resonance it is warm and slightly furry. at high resonance it begins to ping n pop like a plucked string when the rungler steps the cutoff underneath it.
+state variable filter. drive presses the input through tanh before it enters. resonance feeds the bandpass back into the input. when the rungler steps the cutoff, the filter pings at the new frequency and drips to silence.
 
 ```
          input
            │
-      [tanh × drive]           ← filter drive knob furs the signal
+      + ◀──┤◀──[Q × band]        ← resonance tap feeds back here
+           │
+      [tanh × drive]
+           │
+         [hp] = driven − low − feedback
            │
       ┌────┴────┐
-      │  pole 1 │◀──[tanh × resonance]◀──┐
-      │  low1  ─┼──────────────────────────┘
-      └────┬────┘   (feedback from pole 1 output,
-           │         bounded, cannot explode)
+      │  band  ─┼──▶ band += F × hp
+      └────┬────┘
       ┌────┴────┐
-      │  pole 2 │
-      │  low2   │
+      │   low  ─┼──▶ low  += F × band
       └────┬────┘
            │
-      [tanh × 0.8]
+         [tanh]
            │
           out
 
-    when filter chaos is high and resonance is high,
-    each rungler step jerks the cutoff to a new place
-    and the feedback loop rings there drip drip drip 
-    like water finding new paths through stone
+    each rungler crossing abruptly shifts F.
+    the band path rings at the new cutoff.
 ```
 
 ---
@@ -92,7 +91,7 @@ two integrators in cascade, feedback saturated through hyperbolic tangent so it 
 
 **filter drive** — tanh saturation pressed against the filter's mouth.
 
-**ring modulation** — osc1 multiplied by osc2, folded back into the signal.
+**ring modulation** — osc1 × osc2, true bipolar multiply. clang and difference tones and sum frequencies, no extra smearing.
 
 ---
 
@@ -170,4 +169,4 @@ the module goes to `/data/UserData/schwung/modules/sound_generators/kwahzolin/` 
 
 ---
 
-*v0.1.1*
+*v0.1.2*
