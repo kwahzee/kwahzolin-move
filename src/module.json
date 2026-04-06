@@ -2,7 +2,7 @@
   "id": "kwahzolin",
   "name": "Kwahzolin",
   "abbrev": "KW",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "api_version": 2,
   "capabilities": {
     "chainable": true,
@@ -18,7 +18,7 @@
             "osc_chaos",
             "filter_cutoff",
             "filter_resonance",
-            "filter_drive",
+            "filter_lfo",
             "filter_chaos",
             "loop"
           ],
@@ -28,7 +28,7 @@
             { "key": "osc_chaos",         "label": "Osc Chaos"        },
             { "key": "filter_cutoff",     "label": "Filter Cutoff"    },
             { "key": "filter_resonance",  "label": "Filter Resonance" },
-            { "key": "filter_drive",      "label": "Filter Drive"     },
+            { "key": "filter_lfo",        "label": "Filter LFO"       },
             { "key": "filter_chaos",      "label": "Filter Chaos"     },
             { "key": "loop",              "label": "Loop"             }
           ]
