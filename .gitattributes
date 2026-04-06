@@ -13,6 +13,10 @@
 *.cmd text eol=crlf
 *.ps1 text eol=crlf
 
+# YAML files - always LF
+*.yml text eol=lf
+*.yaml text eol=lf
+
 # JSON, JS, and other text files - normalize to LF
 *.json text eol=lf
 *.js text eol=lf
