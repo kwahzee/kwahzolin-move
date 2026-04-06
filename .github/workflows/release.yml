@@ -39,23 +39,18 @@ jobs:
         with:
           files: dist/kwahzolin-module.tar.gz
 
-      - name: Update release.json
-        run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
-          REPO="${GITHUB_REPOSITORY}"
-          cat > release.json <<EOF
-          {
-            "version": "$VERSION",
-            "download_url": "https://github.com/$REPO/releases/download/v$VERSION/kwahzolin-module.tar.gz"
-          }
-          EOF
-
       - name: Commit release.json
         run: |
+          git fetch origin main
+          git checkout -f main
           git config user.email "github-actions@github.com"
           git config user.name  "GitHub Actions"
-          git fetch origin main
-          git checkout main
+          cat > release.json <<EOF
+          {
+            "version": "${{ github.ref_name }}",
+            "download_url": "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/kwahzolin-module.tar.gz"
+          }
+          EOF
           git add release.json
-          git diff --staged --quiet || git commit -m "release: update release.json for v${GITHUB_REF#refs/tags/v}"
+          git diff --staged --quiet || git commit -m "release: update release.json for ${{ github.ref_name }}"
           git push origin main
