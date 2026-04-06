@@ -18,7 +18,7 @@ static inline float param_to_osc_hz(float p) {
 }
 
 static inline float param_to_cutoff_hz(float p) {
-    return 80.0f * powf(100.0f, clampf(p, 0.0f, 1.0f));
+    return 20.0f * powf(400.0f, clampf(p, 0.0f, 1.0f));
 }
 
 typedef struct {
@@ -32,12 +32,16 @@ typedef struct {
     float svf_lp;
     float svf_bp;
 
+    float lfo_phase;
+    int   inject_impulse;
+    float impulse_val;
+
     float t_osc1_freq;
     float t_osc2_freq;
     float t_osc_chaos;
     float t_filter_cutoff;
     float t_filter_resonance;
-    float t_filter_drive;
+    float t_filter_lfo;
     float t_filter_chaos;
     float t_loop;
 
@@ -46,7 +50,7 @@ typedef struct {
     float p_osc_chaos;
     float p_filter_cutoff;
     float p_filter_resonance;
-    float p_filter_drive;
+    float p_filter_lfo;
     float p_filter_chaos;
     float p_loop;
 
@@ -69,7 +73,7 @@ static void *kwahzolin_create(const char *module_dir, const char *json_defaults)
     k->t_osc_chaos        = 0.3f;
     k->t_filter_cutoff    = 800.0f;
     k->t_filter_resonance = 0.5f;
-    k->t_filter_drive     = 0.2f;
+    k->t_filter_lfo       = 0.0f;
     k->t_filter_chaos     = 0.4f;
     k->t_loop             = 0.0f;
 
@@ -78,7 +82,7 @@ static void *kwahzolin_create(const char *module_dir, const char *json_defaults)
     k->p_osc_chaos        = k->t_osc_chaos;
     k->p_filter_cutoff    = k->t_filter_cutoff;
     k->p_filter_resonance = k->t_filter_resonance;
-    k->p_filter_drive     = k->t_filter_drive;
+    k->p_filter_lfo       = k->t_filter_lfo;
     k->p_filter_chaos     = k->t_filter_chaos;
     k->p_loop             = k->t_loop;
 
@@ -112,8 +116,8 @@ static void kwahzolin_set_param(void *inst, const char *key, const char *val) {
         k->t_osc_chaos = clampf(f, 0.0f, 1.0f);
     } else if (!strcmp(key, "filter_resonance")) {
         k->t_filter_resonance = clampf(f, 0.0f, 1.0f);
-    } else if (!strcmp(key, "filter_drive")) {
-        k->t_filter_drive = clampf(f, 0.0f, 1.0f);
+    } else if (!strcmp(key, "filter_lfo")) {
+        k->t_filter_lfo = clampf(f, 0.0f, 1.0f);
     } else if (!strcmp(key, "filter_chaos")) {
         k->t_filter_chaos = clampf(f, 0.0f, 1.0f);
     } else if (!strcmp(key, "loop")) {
@@ -130,7 +134,7 @@ static int kwahzolin_get_param(void *inst, const char *key, char *buf, int buf_l
     if (!strcmp(key, "osc_chaos"))        return snprintf(buf, buf_len, "%.4f", k->t_osc_chaos);
     if (!strcmp(key, "filter_cutoff"))    return snprintf(buf, buf_len, "%.4f", k->t_filter_cutoff);
     if (!strcmp(key, "filter_resonance")) return snprintf(buf, buf_len, "%.4f", k->t_filter_resonance);
-    if (!strcmp(key, "filter_drive"))     return snprintf(buf, buf_len, "%.4f", k->t_filter_drive);
+    if (!strcmp(key, "filter_lfo"))       return snprintf(buf, buf_len, "%.4f", k->t_filter_lfo);
     if (!strcmp(key, "filter_chaos"))     return snprintf(buf, buf_len, "%.4f", k->t_filter_chaos);
     if (!strcmp(key, "loop"))             return snprintf(buf, buf_len, "%.4f", k->t_loop);
 
@@ -144,11 +148,11 @@ static int kwahzolin_get_param(void *inst, const char *key, char *buf, int buf_l
             "{\"key\":\"osc_chaos\",\"name\":\"Osc Chaos\","
                 "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.3},"
             "{\"key\":\"filter_cutoff\",\"name\":\"Filter Cutoff\","
-                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.5},"
+                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.616},"
             "{\"key\":\"filter_resonance\",\"name\":\"Filter Resonance\","
                 "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.5},"
-            "{\"key\":\"filter_drive\",\"name\":\"Filter Drive\","
-                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.2},"
+            "{\"key\":\"filter_lfo\",\"name\":\"Filter LFO\","
+                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.0},"
             "{\"key\":\"filter_chaos\",\"name\":\"Filter Chaos\","
                 "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.4},"
             "{\"key\":\"loop\",\"name\":\"Loop\","
@@ -180,18 +184,11 @@ static void kwahzolin_render_block(void *inst, int16_t *out_lr, int frames) {
     k->p_osc_chaos        += (k->t_osc_chaos        - k->p_osc_chaos)        * sc;
     k->p_filter_cutoff    += (k->t_filter_cutoff    - k->p_filter_cutoff)    * sc;
     k->p_filter_resonance += (k->t_filter_resonance - k->p_filter_resonance) * sc;
-    k->p_filter_drive     += (k->t_filter_drive     - k->p_filter_drive)     * sc;
+    k->p_filter_lfo       += (k->t_filter_lfo       - k->p_filter_lfo)       * sc;
     k->p_filter_chaos     += (k->t_filter_chaos     - k->p_filter_chaos)     * sc;
     k->p_loop             += (k->t_loop             - k->p_loop)             * sc;
 
-    const float damping    = 2.0f * (1.0f - k->p_filter_resonance * 0.99f);
-    const float drive_gain = 1.0f + k->p_filter_drive * 19.0f;
-
-    float cutoff_hz = clampf(
-        k->p_filter_cutoff + k->rungler_cv * k->p_filter_chaos * 4000.0f,
-        80.0f, 8000.0f
-    );
-    float svf_f = clampf(2.0f * sinf(KWAH_PI * cutoff_hz / KWAH_SR), 0.001f, 0.99f);
+    const float damping = 2.0f * (1.0f - k->p_filter_resonance * 0.995f);
 
     for (int i = 0; i < frames; i++) {
 
@@ -210,6 +207,12 @@ static void kwahzolin_render_block(void *inst, int16_t *out_lr, int frames) {
             ? (4.0f * k->osc2_phase - 1.0f)
             : (3.0f - 4.0f * k->osc2_phase);
 
+        k->lfo_phase += 0.2f / KWAH_SR;
+        if (k->lfo_phase >= 1.0f) k->lfo_phase -= 1.0f;
+        float lfo_out = (k->lfo_phase < 0.5f)
+            ? (4.0f * k->lfo_phase - 1.0f)
+            : (3.0f - 4.0f * k->lfo_phase);
+
         if (osc2 > 0.0f && k->osc2_prev <= 0.0f) {
             uint8_t new_bit = (osc1 > 0.0f) ? 1 : 0;
             uint8_t top_bit = (k->shift_reg >> 7) & 1;
@@ -227,11 +230,8 @@ static void kwahzolin_render_block(void *inst, int16_t *out_lr, int frames) {
             k->shift_reg  = ((k->shift_reg << 1) | chosen) & 0xFF;
             k->rungler_cv = k->shift_reg / 255.0f;
 
-            cutoff_hz = clampf(
-                k->p_filter_cutoff + k->rungler_cv * k->p_filter_chaos * 4000.0f,
-                80.0f, 8000.0f
-            );
-            svf_f = clampf(2.0f * sinf(KWAH_PI * cutoff_hz / KWAH_SR), 0.001f, 0.99f);
+            k->inject_impulse = 1;
+            k->impulse_val    = (k->rungler_cv - 0.5f) * 1.0f;
         }
         k->osc2_prev = osc2;
 
@@ -239,7 +239,23 @@ static void kwahzolin_render_block(void *inst, int16_t *out_lr, int frames) {
         float pulse2  = (osc2 > 0.0f) ? 1.0f : -1.0f;
         float xor_out = (pulse1 != pulse2) ? 1.0f : -1.0f;
 
-        float driven = tanhf(xor_out * drive_gain);
+        float mod_chaos = k->rungler_cv * k->p_filter_chaos * 4000.0f;
+        float mod_lfo   = lfo_out * k->p_filter_lfo * 2000.0f;
+        float cutoff_hz;
+        if (k->p_filter_cutoff <= 20.5f) {
+            cutoff_hz = 20.0f;
+        } else {
+            cutoff_hz = clampf(k->p_filter_cutoff + mod_chaos + mod_lfo, 20.0f, 8000.0f);
+        }
+        float svf_f = clampf(2.0f * sinf(KWAH_PI * cutoff_hz / KWAH_SR), 0.001f, 0.99f);
+
+        float input_sig = xor_out;
+        if (k->inject_impulse) {
+            input_sig += k->impulse_val;
+            k->inject_impulse = 0;
+        }
+        float driven = tanhf(input_sig * 2.0f);
+
         float hp     = driven - damping * k->svf_bp - k->svf_lp;
         float new_bp = svf_f * hp + k->svf_bp;
         new_bp       = clampf(tanhf(new_bp * 0.5f) * 2.0f, -3.0f, 3.0f);
@@ -247,7 +263,8 @@ static void kwahzolin_render_block(void *inst, int16_t *out_lr, int frames) {
         k->svf_bp = new_bp;
         k->svf_lp = new_lp;
 
-        float filtered = tanhf(k->svf_lp * 0.6f);
+        float mixed    = (k->svf_lp * 0.5f) + (k->svf_bp * 0.5f);
+        float filtered = tanhf(mixed * 0.6f);
 
         int16_t sample = (int16_t)clampf(filtered * 28000.0f, -32767.0f, 32767.0f);
         out_lr[i * 2]     = sample;

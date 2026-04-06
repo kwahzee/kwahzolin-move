@@ -8,12 +8,12 @@
         ~~~  the rungler  ~~~
 
     osc2 ──▶ [clock] ──▶ [ 8 bit shift register ]
-                              │   │   │   │
-                         bit7  bit5  bit3  bit0
-                              └───┬───┘
-                           [weighted sum] ──▶ rungler cv ──▶ osc1 freq
-                                                         ├──▶ osc2 freq
-                                                         └──▶ filter cutoff
+                              │
+                         shift_reg / 255
+                              │
+                         rungler cv ──▶ osc1 freq
+                                   ├──▶ osc2 freq
+                                   └──▶ filter cutoff
 
     osc2 clocks the shift register on every
     positive zero crossing. osc1's sign becomes
@@ -27,41 +27,39 @@
 ```
     ·  ·  ·  signal path  ·  ·  ·
 
-    [osc1] ──▶ pulse ──▶ XOR ──┐
-                               ├──▶ [ring blend] ──▶ [filter] ──▶ out
-    [osc2] ──▶ pulse ──▶ XOR ──┘         ▲               ▲
-               osc1 × osc2 ─────────────┘        rungler cv
+    [osc1] ──▶ pulse ──▶ XOR ──▶ [filter] ──▶ out
+    [osc2] ──▶ pulse ──┘               ▲
+                                  rungler cv
 ```
 
 ---
 
 ## filter
 
-state variable filter. drive presses the input through tanh before it enters. resonance feeds the bandpass back into the input. when the rungler steps the cutoff, the filter pings at the new frequency and blips to null.
+state variable filter. damping controls resonance, band pass feeds back into hi pass. output mixes lo pass and band pass equally. at high resonance the filter self-oscillates as a sine at the cutoff.
 
 ```
          input
            │
-      + ◀──┤◀──[Q × band]  
+         [tanh]
            │
-      [tanh × drive]
-           │
-         [hp] = driven − low − feedback
+         [hp] = driven − damping×band − low
            │
       ┌────┴────┐
-      │  band  ─┼──▶ band += F × hp
+      │  band  ─┼──▶ band += F × hp  (soft-limited)
       └────┬────┘
       ┌────┴────┐
       │   low  ─┼──▶ low  += F × band
       └────┬────┘
            │
+      50% low + 50% band
+           │
          [tanh]
            │
           out
-
-    each rungler crossing abruptly shifts F.
-    the band path rings at the new cutoff.
 ```
+
+a slow triangle lfo (0.2 hz) runs always. filter lfo knob controls how much it sweeps the cutoff.
 
 ---
 
@@ -72,25 +70,25 @@ state variable filter. drive presses the input through tanh before it enters. re
     │  1  │ │  2  │ │  3  │ │  4  │ │  5  │ │  6  │ │  7  │ │  8  │
     └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘
        │       │       │       │       │       │       │       │
-      osc1    osc2    osc     filt    filt    filt    filt    ring
-      freq    freq   chaos   cutoff  reson    chaos   drive    mod
+      osc1    osc2    osc    filter  filter  filter  filter  loop
+      freq    freq   chaos   cutoff  reson    lfo    chaos
 ```
 
 **osc 1 frequency** — the base pitch of the first triangle.
 
 **osc 2 frequency** — the clock rate of the kwahzolin. slow osc2 means the rungler evolves languidly. fast osc2 and everything seizes up.
 
-**osc chaos** — how deep the rungler digs into both oscillators' frequencies. at zero, both run clean at their set rates. at maximum, both smear across an octave or more by whatever pattern the shift register has accumulated.
+**osc chaos** — how deep the rungler digs into both oscillators' frequencies. at zero, both run clean at their set rates. at maximum, both smear across an octave or more.
 
-**filter cutoff** — the resting mouth of the filter. the rungler will drag this around if filter chaos is open.
+**filter cutoff** — the resting mouth of the filter. the rungler and lfo drag it round.
 
-**filter resonance** — the amount of self-feedback. at high values thee filter pings from a rungler step like a small bell struck underwater.
+**filter resonance** — the amount of self-feedback. at high values the filter pings from every rungler step. at maximum it self-oscillates as a sine at the cutoff frequency.
+
+**filter lfo** — how much the slow internal lfo sweeps the cutoff. at zero the lfo has no effect. at maximum it swings up to 2000hz above the base cutoff in a 20-second triangle cycle.
 
 **filter chaos** — how much the rungler's accumulated pattern hurls the filter cutoff around. at high resonance + high filter chaos, every shift register step pings the filter at a different frequency.
 
-**filter drive** — tanh saturation pressed against the filter's mouth.
-
-**ring modulation** — osc1 × osc2, true bipolar multiply. clang and difference tones and sum frequencies.
+**loop** — turing machine style register control. at zero tm is fully random. at one tm is fully locked. in the middle tm slowly mutates.
 
 ---
 
@@ -124,4 +122,4 @@ the module goes to `/data/UserData/schwung/modules/sound_generators/kwahzolin/` 
 
 ---
 
-*v0.1.3*
+*v0.1.5*
