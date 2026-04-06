@@ -116,8 +116,10 @@ static void *kwahzolin_create(const char *module_dir, const char *json_defaults)
     kwahzolin_t *k = (kwahzolin_t *)calloc(1, sizeof(kwahzolin_t));
     if (!k) return NULL;
 
-    /* IIR coefficient — per-sample 15ms time constant */
-    k->smooth_coeff = 1.0f - expf(-1.0f / (KWAH_SR * 0.015f));
+    /* IIR coefficient — block-rate 15ms time constant
+     * Smoothing is applied once per 128-sample block, so the exponent
+     * uses MOVE_FRAMES_PER_BLOCK / (SR * tau) not 1 / (SR * tau). */
+    k->smooth_coeff = 1.0f - expf(-(float)MOVE_FRAMES_PER_BLOCK / (KWAH_SR * 0.015f));
 
     /* Target parameter defaults */
     k->t_osc1_freq        = 110.0f;  /* Hz */
