@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash scripts/build.sh)",
+      "Bash(gcc -x c -fsyntax-only -Wall -Wextra -I src/dsp/include src/dsp/kwahzolin.c)",
+      "Read(//usr/**)",
+      "Read(//c/Program Files/LLVM/**)",
+      "Read(//c/msys64/usr/**)",
+      "Bash(grep -E \"gcc|clang|cc$\")",
+      "Read(//mingw64/**)",
+      "Read(//ucrt64/**)",
+      "Bash(command -v x86_64-pc-msys-gcc)",
+      "Read(//c/msys64/ucrt64/**)",
+      "Read(//c/msys64/mingw64/**)",
+      "mcp__serena__get_symbols_overview",
+      "mcp__serena__find_symbol"
+    ]
+  }
+}
