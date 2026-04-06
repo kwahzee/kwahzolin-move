@@ -3,16 +3,19 @@
  *
  * Handles:
  *   - 8 knobs (CC 71–78, relative delta) → parameters sent to DSP
- *   - Pads 68–99 → loop length control (pad index+1 = beats, 1–32)
+ *   - Pads 68–99 → loop length control (pad N+1 = N+1 Osc2 crossings, 1–32)
+ *     Pressing pad N lights pads 0..N. Pressing the active pad cancels loop.
  *   - Step buttons 16–31 → 16-step sequencer gate toggles
- *   - MIDI clock (0xF8) → BPM measurement and fallback to host_get_setting
- *   - Display: knob feedback / loop status / step sequencer blocks
+ *   - MIDI clock (0xF8) → BPM measurement for display
+ *   - Display: large "KWAHZOLIN" pixel title, glitch visualizer, loop status,
+ *     step sequencer blocks
  *
  * Display layout (128×64, 1-bit):
- *   y=2:   Module name or active knob name
- *   y=13:  Knob value (when feedback active) or loop status
- *   y=24:  BPM info
- *   y=40:  16-step blocks (7×12 px each)
+ *   Glitch layer   scattered blocks reacting to Osc Chaos + Filter Chaos
+ *   y=25..38       "KWAHZOLIN" in 5×7 pixel font at scale 2 (fill_rect)
+ *                  (or knob name + value when a knob is being turned)
+ *   y=42           Loop status: "FREE" or "LOOP Nsteps"
+ *   y=52..62       16 step sequencer blocks (7×11 px each, 8px pitch)
  */
 
 import {
@@ -34,108 +37,141 @@ import {
 const KNOB_CC_BASE  = MoveKnob1;   /* 71 */
 const KNOB_COUNT    = 8;
 
-const KNOB_KEYS  = ['osc1_rate', 'osc2_rate', 'chaos', 'cutoff',
-                     'resonance', 'drive', 'rungler_mod', 'ring_mod'];
-const KNOB_NAMES = ['Osc1', 'Osc2', 'Chaos', 'Cutoff',
-                     'Reson', 'Drive', 'R.Mod', 'Ring'];
+const KNOB_KEYS  = ['osc1_rate',  'osc2_rate',  'osc_chaos',     'filter_cutoff',
+                    'filter_resonance', 'filter_chaos', 'filter_drive', 'ring_mod'];
 
-/* Default knob values 0–127 (matching DSP defaults) */
-const KNOB_DEFAULTS = [25, 19, 64, 64, 38, 25, 64, 0];
+/* Short names shown in display during knob feedback */
+const KNOB_NAMES = ['Osc 1', 'Osc 2', 'OscCha', 'Cutoff',
+                    'Resona', 'FltCha', 'FltDrv', 'RingMd'];
 
-/* How many tick() calls to show knob feedback (~1.5 sec @ 44 Hz) */
+/* Default knob values 0–127 matching DSP defaults */
+const KNOB_DEFAULTS = [25, 19, 64, 64, 38, 64, 25, 0];
+
+/* Ticks to show knob feedback (~1.5 sec @ 44 Hz) */
 const FEEDBACK_TICKS = 66;
 
-/* MIDI clock: 24 ticks per beat */
-const TICKS_PER_BEAT = 24;
-
-/* Tick count for clock-loss detection (~2 sec @ 44 Hz) */
+/* MIDI clock */
+const TICKS_PER_BEAT  = 24;
 const CLOCK_LOSS_TICKS = 88;
 
-/* LED colors for pads and steps */
+/* LED colors */
 const COLOR_STEP_ON    = 120;  /* White */
-const COLOR_STEP_OFF   = 0;    /* Black (off) */
+const COLOR_STEP_OFF   = 0;    /* Off   */
 const COLOR_PAD_ACTIVE = 11;   /* Neon Green */
-const COLOR_PAD_IDLE   = 0;    /* Black */
-const COLOR_LOOP_ARMED = 8;    /* Bright Green */
+const COLOR_PAD_IDLE   = 0;    /* Off        */
+
+/* ====================================================================
+ * Pixel font — 5×7 bitmap for each character in "KWAHZOLIN"
+ * Each entry is 7 row values. Each row is a 5-bit number where
+ * bit 4 = leftmost column, bit 0 = rightmost column.
+ * ==================================================================== */
+
+const FONT5x7 = {
+    /* K:  X . . . X        W:  X . . . X        A:  . X X X .
+           X . . X .            X . . . X             X . . . X
+           X . X . .            X . X . X             X . . . X
+           X X . . .            X . X . X             X X X X X
+           X . X . .            X X . X X             X . . . X
+           X . . X .            X X . X X             X . . . X
+           X . . . X            X . . . X             X . . . X  */
+    K: [17, 18, 20, 24, 20, 18, 17],
+    W: [17, 17, 21, 21, 27, 27, 17],
+    A: [14, 17, 17, 31, 17, 17, 17],
+
+    /* H:  X . . . X        Z:  X X X X X        O:  . X X X .
+           X . . . X            . . . . X             X . . . X
+           X . . . X            . . . X .             X . . . X
+           X X X X X            . . X . .             X . . . X
+           X . . . X            . X . . .             X . . . X
+           X . . . X            X . . . .             X . . . X
+           X . . . X            X X X X X             . X X X .  */
+    H: [17, 17, 17, 31, 17, 17, 17],
+    Z: [31,  1,  2,  4,  8, 16, 31],
+    O: [14, 17, 17, 17, 17, 17, 14],
+
+    /* L:  X . . . .        I:  X X X X X        N:  X . . . X
+           X . . . .            . . X . .             X X . . X
+           X . . . .            . . X . .             X . X . X
+           X . . . .            . . X . .             X . X . X
+           X . . . .            . . X . .             X . . X X
+           X . . . .            . . X . .             X . . . X
+           X X X X X            X X X X X             X . . . X  */
+    L: [16, 16, 16, 16, 16, 16, 31],
+    I: [31,  4,  4,  4,  4,  4, 31],
+    N: [17, 25, 21, 21, 19, 17, 17],
+};
+
+const TITLE_STR  = 'KWAHZOLIN';
+const CHAR_SCALE = 2;
+const CHAR_W     = 5 * CHAR_SCALE;                                      /* 10px */
+const CHAR_H     = 7 * CHAR_SCALE;                                      /* 14px */
+const CHAR_GAP   = 2;
+const TITLE_W    = TITLE_STR.length * CHAR_W + (TITLE_STR.length - 1) * CHAR_GAP; /* 106px */
+const TITLE_X    = (128 - TITLE_W) >> 1;                                /* 11px */
+const TITLE_Y    = 25;   /* centered vertically on the 128×64 display  */
+const STATUS_Y   = 42;
+const STEPS_Y    = 52;
+const STEPS_H    = 11;
 
 /* ====================================================================
  * State
  * ==================================================================== */
 
-/* Knob values 0–127, accumulated from relative deltas */
-const knobValues = [...KNOB_DEFAULTS];
+const knobValues    = [...KNOB_DEFAULTS];
 
-/* Knob display feedback */
-let activeKnob      = -1;       /* index 0–7, or -1 for none */
+let activeKnob      = -1;
 let feedbackTicks   = 0;
 
-/* BPM tracking */
 let bpm             = 120;
-let clockTickCount  = 0;        /* counts 0xF8 ticks within one beat */
-let lastClockMs     = 0;        /* real-time of last beat tick */
-let ticksSinceClock = 0;        /* tick() calls since last 0xF8 */
+let clockTickCount  = 0;
+let lastClockMs     = 0;
+let ticksSinceClock = 0;
 let clockActive     = false;
 
-/* Loop state (one pad active at most) */
-let activePadIndex  = -1;       /* -1 = free running, 0–31 = loop beats-1 */
+let activePadIndex  = -1;   /* -1 = free running, 0–31 = loop active */
+let stepMask        = 0xFFFF;
 
-/* Step sequencer (16 steps) */
-let stepMask        = 0xFFFF;   /* all steps on */
-
-/* Display dirty tracking — redraw only when state changes */
 let displayDirty    = true;
-let prevTitle       = '';
 let prevStatus      = '';
-let prevBpmStr      = '';
 let prevStepMask    = -1;
+
+/* Progressive LED init */
+let ledInitPhase    = 0;
+let ledInitIndex    = 0;
+const LEDS_PER_TICK = 8;
 
 /* ====================================================================
  * Utilities
  * ==================================================================== */
 
-/** Convert 0–127 knob value to 0–1 float string for set_param */
-function knobToParam(v) {
-    return (v / 127.0).toFixed(4);
-}
-
-/** Send a knob parameter to the DSP */
-function sendKnobParam(idx) {
-    host_module_set_param(KNOB_KEYS[idx], knobToParam(knobValues[idx]));
-}
-
-/** Build a human-readable value string for display */
-function knobValueDisplay(idx) {
-    const pct = Math.round(knobValues[idx] / 1.27);
-    return `${pct}%`;
-}
+function knobToParam(v)      { return (v / 127.0).toFixed(4); }
+function sendKnobParam(idx)  { host_module_set_param(KNOB_KEYS[idx], knobToParam(knobValues[idx])); }
+function knobValueDisplay(i) { return `${Math.round(knobValues[i] / 1.27)}%`; }
 
 /* ====================================================================
  * LED helpers
  * ==================================================================== */
 
+/**
+ * Light all pads from index 0 up to and including activePadIndex,
+ * so the number of lit pads visually shows the loop length.
+ * All pads off when activePadIndex = -1 (free running).
+ */
 function refreshPadLEDs() {
     for (let i = 0; i < 32; i++) {
-        const note = MovePads[i];
-        setLED(note, i === activePadIndex ? COLOR_PAD_ACTIVE : COLOR_PAD_IDLE);
+        setLED(MovePads[i], i <= activePadIndex ? COLOR_PAD_ACTIVE : COLOR_PAD_IDLE);
     }
 }
 
 function refreshStepLEDs() {
     for (let i = 0; i < 16; i++) {
-        const note = MoveSteps[i];
-        const on   = (stepMask >> i) & 1;
-        setLED(note, on ? COLOR_STEP_ON : COLOR_STEP_OFF);
+        setLED(MoveSteps[i], (stepMask >> i) & 1 ? COLOR_STEP_ON : COLOR_STEP_OFF);
     }
 }
 
-/* Progressive LED init to avoid overflowing the ~64-packet buffer */
-let ledInitPhase    = 0;  /* 0=pads, 1=steps, 2=done */
-let ledInitIndex    = 0;
-const LEDS_PER_TICK = 8;
-
+/* Progressive LED init to avoid flooding the ~64-packet buffer */
 function initLEDsBatch() {
     if (ledInitPhase === 0) {
-        /* Init pads in batches */
         const end = Math.min(ledInitIndex + LEDS_PER_TICK, 32);
         for (let i = ledInitIndex; i < end; i++) {
             setLED(MovePads[i], COLOR_PAD_IDLE);
@@ -143,11 +179,9 @@ function initLEDsBatch() {
         ledInitIndex = end;
         if (ledInitIndex >= 32) { ledInitPhase = 1; ledInitIndex = 0; }
     } else if (ledInitPhase === 1) {
-        /* Init steps in batches */
         const end = Math.min(ledInitIndex + LEDS_PER_TICK, 16);
         for (let i = ledInitIndex; i < end; i++) {
-            const on = (stepMask >> i) & 1;
-            setLED(MoveSteps[i], on ? COLOR_STEP_ON : COLOR_STEP_OFF);
+            setLED(MoveSteps[i], (stepMask >> i) & 1 ? COLOR_STEP_ON : COLOR_STEP_OFF);
         }
         ledInitIndex = end;
         if (ledInitIndex >= 16) { ledInitPhase = 2; }
@@ -158,7 +192,6 @@ function initLEDsBatch() {
  * BPM helpers
  * ==================================================================== */
 
-/** Called on each MIDI 0xF8 message */
 function handleClockTick() {
     ticksSinceClock = 0;
     clockActive     = true;
@@ -171,20 +204,13 @@ function handleClockTick() {
             const interval = now - lastClockMs;
             if (interval > 0) {
                 const measured = 60000 / interval;
-                if (measured >= 20 && measured <= 300) {
-                    bpm = measured;
-                    /* If a loop is active, re-send loop_beats so DSP recomputes
-                       loop_samples on its next block with the current BPM.
-                       DSP does this automatically via host->get_bpm(), but updating
-                       the beat count forces a re-snapshot if length changed. */
-                }
+                if (measured >= 20 && measured <= 300) bpm = measured;
             }
         }
         lastClockMs = now;
     }
 }
 
-/** Read fallback BPM from host settings */
 function readHostBPM() {
     try {
         const v = parseInt(host_get_setting('tempo_bpm'), 10);
@@ -197,18 +223,21 @@ function readHostBPM() {
  * Loop control
  * ==================================================================== */
 
-/** Arm or disarm a loop. padIndex 0–31, or -1 to disarm. */
+/**
+ * Arm a loop of (padIndex + 1) Osc2 crossings, or cancel if the
+ * currently active pad (the last lit pad) is pressed again.
+ */
 function setLoop(padIndex) {
     if (padIndex === activePadIndex) {
-        /* Same pad: toggle off → free running */
+        /* Pressing the active pad: cancel loop → free running */
         activePadIndex = -1;
         host_module_set_param('loop_active', '0');
     } else {
-        /* New pad: disarm old, arm new */
+        /* New pad: arm loop at new length */
         activePadIndex = padIndex;
-        const beats = padIndex + 1;   /* pad 0 = 1 beat, pad 31 = 32 beats */
-        host_module_set_param('loop_active', '0');   /* ensure fresh snapshot */
-        host_module_set_param('loop_beats',  String(beats));
+        const steps = padIndex + 1;   /* pad 0 = 1 crossing, pad 31 = 32 crossings */
+        host_module_set_param('loop_active', '0');   /* force fresh snapshot */
+        host_module_set_param('loop_beats',  String(steps));
         host_module_set_param('loop_active', '1');
     }
     refreshPadLEDs();
@@ -219,79 +248,128 @@ function setLoop(padIndex) {
  * Step sequencer
  * ==================================================================== */
 
-/** Toggle step bit and send to DSP */
 function toggleStep(stepIndex) {
     stepMask ^= (1 << stepIndex);
     host_module_set_param('step_mask', String(stepMask));
-    const on = (stepMask >> stepIndex) & 1;
-    setLED(MoveSteps[stepIndex], on ? COLOR_STEP_ON : COLOR_STEP_OFF);
+    setLED(MoveSteps[stepIndex], (stepMask >> stepIndex) & 1 ? COLOR_STEP_ON : COLOR_STEP_OFF);
     displayDirty = true;
 }
 
 /* ====================================================================
- * Display
+ * Display — pixel font renderer
  * ==================================================================== */
 
-function drawStepSequencer() {
-    /* 16 blocks × 8px wide = 128px. Each block: 7px wide, 12px tall at y=40 */
-    for (let i = 0; i < 16; i++) {
-        const x  = i * 8 + 1;
-        const on = (stepMask >> i) & 1;
-        if (on) {
-            fill_rect(x, 40, 7, 12, 1);
-        } else {
-            draw_rect(x, 40, 7, 12, 1);
+function drawChar(x, y, ch) {
+    const rows = FONT5x7[ch];
+    if (!rows) return;
+    for (let row = 0; row < 7; row++) {
+        const bits = rows[row];
+        const py = y + row * CHAR_SCALE;
+        for (let col = 0; col < 5; col++) {
+            if ((bits >> (4 - col)) & 1) {
+                fill_rect(x + col * CHAR_SCALE, py, CHAR_SCALE, CHAR_SCALE, 1);
+            }
         }
     }
 }
 
-function buildTitle() {
-    if (activeKnob >= 0) return KNOB_NAMES[activeKnob];
-    return 'KWAHZOLIN';
+function drawTitle() {
+    for (let i = 0; i < TITLE_STR.length; i++) {
+        drawChar(TITLE_X + i * (CHAR_W + CHAR_GAP), TITLE_Y, TITLE_STR[i]);
+    }
 }
 
+/* ====================================================================
+ * Display — glitch visualizer
+ *
+ * Reacts to combined Osc Chaos (index 2) + Filter Chaos (index 5).
+ * Low chaos: sparse small outline rects, slow feel.
+ * High chaos: many large filled blocks, aggressive tearing.
+ * Drawn before the title so the title overlays the glitch.
+ * ==================================================================== */
+
+function drawGlitch(chaos) {
+    if (chaos < 0.03) return;
+    const n    = Math.ceil(chaos * 12);
+    const maxW = 4  + Math.floor(chaos * 24);
+    const maxH = 2  + Math.floor(chaos * 10);
+    for (let b = 0; b < n; b++) {
+        const bx = Math.floor(Math.random() * 128);
+        const by = Math.floor(Math.random() * (STEPS_Y - 2));
+        const bw = Math.max(2, Math.floor(Math.random() * maxW));
+        const bh = Math.max(1, Math.floor(Math.random() * maxH));
+        const cx = Math.min(bw, 128 - bx);
+        const cy = Math.min(bh, STEPS_Y - 2 - by);
+        if (cx <= 0 || cy <= 0) continue;
+        if (chaos > 0.5 && Math.random() < chaos) {
+            fill_rect(bx, by, cx, cy, 1);
+        } else {
+            draw_rect(bx, by, cx, cy, 1);
+        }
+    }
+}
+
+/* ====================================================================
+ * Display — step sequencer row
+ * ==================================================================== */
+
+function drawStepSequencer() {
+    for (let i = 0; i < 16; i++) {
+        const x  = i * 8 + 1;
+        const on = (stepMask >> i) & 1;
+        if (on) {
+            fill_rect(x, STEPS_Y, 7, STEPS_H, 1);
+        } else {
+            draw_rect(x, STEPS_Y, 7, STEPS_H, 1);
+        }
+    }
+}
+
+/* ====================================================================
+ * Display — main draw
+ * ==================================================================== */
+
 function buildStatus() {
-    if (activeKnob >= 0) return knobValueDisplay(activeKnob);
     if (activePadIndex >= 0) {
-        const beats = activePadIndex + 1;
-        return `LOOP ${beats}b`;
+        return `LOOP ${activePadIndex + 1}steps`;
     }
     return 'FREE';
 }
 
-function buildBPMStr() {
-    if (clockActive) {
-        return `${Math.round(bpm)} BPM`;
-    }
-    /* Fallback: read from host settings */
-    return `${readHostBPM()} BPM`;
-}
-
 function drawUI() {
-    const title   = buildTitle();
-    const status  = buildStatus();
-    const bpmStr  = buildBPMStr();
-    const smask   = stepMask;
+    /* Combined chaos level drives the glitch intensity */
+    const chaos    = (knobValues[2] + knobValues[5]) / 254.0;
+    const glitchOn = chaos > 0.02;
+    const status   = buildStatus();
+    const smask    = stepMask;
 
-    /* Only redraw if something changed */
-    if (!displayDirty
-        && title  === prevTitle
+    /* Skip redraw if nothing changed and no glitch animation running */
+    if (!displayDirty && !glitchOn
         && status === prevStatus
-        && bpmStr === prevBpmStr
         && smask  === prevStepMask) {
         return;
     }
 
     clear_screen();
 
-    print(2, 2,  title,  1);
-    print(2, 13, status, 1);
-    print(2, 24, bpmStr, 1);
+    /* Glitch layer — drawn first so title renders on top of it */
+    if (glitchOn) drawGlitch(chaos);
+
+    /* Title area: large "KWAHZOLIN" normally; knob name+value when turning */
+    if (activeKnob >= 0) {
+        print(2, TITLE_Y,      KNOB_NAMES[activeKnob],       1);
+        print(2, TITLE_Y + 12, knobValueDisplay(activeKnob), 1);
+    } else {
+        drawTitle();
+    }
+
+    /* Loop status line */
+    print(2, STATUS_Y, status, 1);
+
+    /* Step sequencer row */
     drawStepSequencer();
 
-    prevTitle    = title;
     prevStatus   = status;
-    prevBpmStr   = bpmStr;
     prevStepMask = smask;
     displayDirty = false;
 }
@@ -301,28 +379,21 @@ function drawUI() {
  * ==================================================================== */
 
 globalThis.init = function () {
-    /* Push defaults to DSP */
     for (let i = 0; i < KNOB_COUNT; i++) sendKnobParam(i);
     host_module_set_param('loop_active', '0');
     host_module_set_param('loop_beats',  '4');
     host_module_set_param('step_mask',   String(stepMask));
 
-    /* Seed BPM from host settings */
     bpm = readHostBPM();
 
-    /* Start progressive LED init */
     ledInitPhase = 0;
     ledInitIndex = 0;
     displayDirty = true;
 };
 
 globalThis.tick = function () {
-    /* Continue LED initialisation over first few frames */
-    if (ledInitPhase < 2) {
-        initLEDsBatch();
-    }
+    if (ledInitPhase < 2) initLEDsBatch();
 
-    /* Advance feedback timer */
     if (activeKnob >= 0) {
         feedbackTicks++;
         if (feedbackTicks > FEEDBACK_TICKS) {
@@ -331,7 +402,6 @@ globalThis.tick = function () {
         }
     }
 
-    /* Clock-loss detection */
     ticksSinceClock++;
     if (ticksSinceClock > CLOCK_LOSS_TICKS && clockActive) {
         clockActive  = false;
@@ -346,16 +416,13 @@ globalThis.tick = function () {
  * ==================================================================== */
 
 globalThis.onMidiMessageInternal = function (data) {
-    /* Bypass noise filter only for MIDI clock — handle it first */
     if (data[0] === 0xF8) {
         handleClockTick();
         return;
     }
 
-    /* Drop capacitive touch events (notes 0–9) */
     if (isCapacitiveTouchMessage(data)) return;
 
-    /* Drop other system messages */
     const statusByte = data[0];
     if (statusByte >= 0xF0) return;
 
@@ -366,26 +433,25 @@ globalThis.onMidiMessageInternal = function (data) {
     const isNote   = status === MidiNoteOn  || status === MidiNoteOff;
     const isCC     = status === MidiCC;
 
-    /* ---- Step buttons (notes 16–31) ---- */
+    /* Step buttons (notes 16–31) */
     if (isNote && d1 >= 16 && d1 <= 31 && isNoteOn) {
         toggleStep(d1 - 16);
         return;
     }
 
-    /* ---- Pads (notes 68–99): loop length ---- */
+    /* Pads (notes 68–99): loop length in Osc2 crossings */
     if (isNote && d1 >= 68 && d1 <= 99 && isNoteOn) {
-        setLoop(d1 - 68);   /* 0–31 = 1–32 beats */
+        setLoop(d1 - 68);
         return;
     }
 
-    /* ---- Knobs (CC 71–78): relative delta ---- */
+    /* Knobs (CC 71–78): relative delta */
     if (isCC && d1 >= KNOB_CC_BASE && d1 < KNOB_CC_BASE + KNOB_COUNT) {
         const idx   = d1 - KNOB_CC_BASE;
         const delta = decodeDelta(d2);
         if (delta !== 0) {
             knobValues[idx] = Math.max(0, Math.min(127, knobValues[idx] + delta));
             sendKnobParam(idx);
-
             activeKnob    = idx;
             feedbackTicks = 0;
             displayDirty  = true;
@@ -395,7 +461,6 @@ globalThis.onMidiMessageInternal = function (data) {
 };
 
 globalThis.onMidiMessageExternal = function (data) {
-    /* Pass-through: forward external MIDI as notes to the DSP */
     const status = data[0] & 0xF0;
     if (status === MidiNoteOn || status === MidiNoteOff) {
         host_module_send_midi(data, 'external');

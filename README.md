@@ -1,101 +1,173 @@
 # kwahzolin
 
-Chaotic rungler synthesizer for [Schwung](https://github.com/charlesvestal/schwung) on Ableton Move.
+*a benjolin-inspired synthesizer module for the ableton move unofficial firmware [schwung](https://github.com/charlesvestal/schwung)*
 
-A dual-oscillator instrument built around an 8-bit shift register (rungler) that feeds back into itself, creating evolving, self-similar patterns that range from melodic and rhythmic at low chaos to unpredictable and noisy at high chaos.
-
-## Signal Chain
+---
 
 ```
-Osc1 (triangle, freq ← rungler CV × Chaos)   → tanh
-Osc2 (triangle, free-running rungler clock)   → tanh
-Mix Osc1 + Osc2                               → tanh
-Ring mod: Osc1 × Osc2 (Ring Mod knob)         → tanh
-Drive saturation                              → tanh
-State variable lowpass filter (high resonance)
-Sequencer gate (16 steps, MIDI-clock synced)
-Output                                        → tanh
+        ~~~  the rungler  ~~~
+
+    osc2 ──▶ [clock] ──▶ [ 8 bit shift register ]
+                              │   │   │   │
+                         bit7  bit5  bit3  bit0
+                              └───┬───┘
+                               [sum] ──▶ rungler cv ──▶ osc1 freq
+                                                    └──▶ filter cutoff
+
+    osc2 clocks the shift register on every
+    positive zero crossing. osc1's sign becomes
+    the new bit. the register members the fergets.
 ```
 
-The rungler shift register is clocked by Osc2 zero-crossings. Its accumulated value modulates Osc1's frequency and the filter cutoff. At high resonance + high drive the filter self-oscillates and screams.
+2 osc, triangle-shaped, circling each other. osc2 is the clock — it ticks the rungler on every upswing, pushing a new bit into the shift register from osc1's sign. the accumulated register value spills back as voltage into osc1's frequency and into the filter's mouth. this is the rungler, rob hordijk's circuit.
 
-## Controls
-
-### 8 Knobs
-
-| # | Knob        | Description                                        |
-|---|-------------|----------------------------------------------------|
-| 1 | Osc1 Rate   | Osc1 frequency (0.5 Hz–5 kHz, exponential)         |
-| 2 | Osc2 Rate   | Osc2 frequency / rungler clock rate                |
-| 3 | Chaos       | Rungler CV depth into Osc1 frequency               |
-| 4 | Cutoff      | SVF base cutoff (20 Hz–20 kHz, exponential)        |
-| 5 | Resonance   | SVF Q — high values cause self-oscillation         |
-| 6 | Drive       | Pre-filter saturation (1× to 20×)                  |
-| 7 | Rungler Mod | How much rungler CV opens the filter               |
-| 8 | Ring Mod    | Osc1 × Osc2 mix into signal                       |
-
-### 32 Pads — Loop Control
-
-Each pad arms a rungler loop of N beats (pad 1 = 1 beat, pad 32 = 32 beats).
-
-- **Press an inactive pad**: snapshot the current shift register state and begin looping it at that beat length, locked to MIDI clock tempo.
-- **Press the active pad again**: release the loop, return to free-running chaos.
-- **Press a different pad**: re-record from the current state at the new beat length.
-
-Loop length follows MIDI clock tempo in real time.
-
-### 16 Step Buttons — Gate Sequencer
-
-Step buttons toggle individual steps in a 16-step gate sequencer.
-
-- Lit step = audio passes through
-- Dark step = audio muted
-- Gate advances every beat (24 MIDI clock ticks)
-- With no MIDI clock: gate advances every 4 Osc2 cycles
-
-## Display
+---
 
 ```
-┌────────────────────────────────┐
-│ KWAHZOLIN         (or knob name)│
-│ FREE / LOOP 4b   (or knob %)   │
-│ 120 BPM                        │
-│ ▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░ │  ← 16 step blocks
-└────────────────────────────────┘
+    ·  ·  ·  signal path  ·  ·  ·
+
+    [osc1]──tanh──┐
+                  ├──mix──tanh──[ring]──tanh──[filter]──[gate]──▶ out
+    [osc2]──tanh──┘                              ▲
+                                         rungler cv
+                                    (jumping, stepping,
+                                      pinging the poles)
 ```
 
-Knob name and value are shown for ~1.5 seconds after a knob is moved.
+---
 
-## Building
+## filter
 
-Requires Docker Desktop (macOS/Windows) or Docker Engine (Linux).
+two integrators in cascade, feedback saturated through hyperbolic tangent so it cannot blow apart. at low resonance it is warm and slightly furry. at high resonance it begins to ping n pop like a plucked string when the rungler steps the cutoff underneath it.
+
+```
+         input
+           │
+      [tanh × drive]           ← filter drive knob furs the signal
+           │
+      ┌────┴────┐
+      │  pole 1 │◀──[tanh × resonance]◀──┐
+      │  low1  ─┼──────────────────────────┘
+      └────┬────┘   (feedback from pole 1 output,
+           │         bounded, cannot explode)
+      ┌────┴────┐
+      │  pole 2 │
+      │  low2   │
+      └────┬────┘
+           │
+      [tanh × 0.8]
+           │
+          out
+
+    when filter chaos is high and resonance is high,
+    each rungler step jerks the cutoff to a new place
+    and the feedback loop rings there drip drip drip 
+    like water finding new paths through stone
+```
+
+---
+
+## knobs
+
+```
+    ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐
+    │  1  │ │  2  │ │  3  │ │  4  │ │  5  │ │  6  │ │  7  │ │  8  │
+    └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘
+       │       │       │       │       │       │       │       │
+      osc1    osc2    osc     filt    filt    filt    filt    ring
+      freq    freq   chaos   cutoff  reson    chaos   drive    mod
+```
+
+**osc 1 frequency** — the base pitch of the first triangle.
+
+**osc 2 frequency** — the clock rate of the kwahzolin. slow osc2 means the rungler evolves languidly. fast osc2 and everything seizes up.
+
+**osc chaos** — how deep the rungler digs into osc1's frequency. at zero, osc1 is steady. at maximum, osc1 smears across an octave or more by whatever pattern the shift register has accumulated.
+
+**filter cutoff** — the resting mouth of the filter. the rungler will drag this around if filter chaos is open.
+
+**filter resonance** — the amount of self-feedback. at high values thee filter pings from a rungler step like a small bell struck underwater.
+
+**filter chaos** — how much the rungler's accumulated pattern hurls the filter cutoff around. at high resonance + high filter chaos, every shift register step pings the filter at a different frequency.
+
+**filter drive** — tanh saturation pressed against the filter's mouth.
+
+**ring modulation** — osc1 multiplied by osc2, folded back into the signal.
+
+---
+
+## pads
+
+```
+    pad grid, 32 pads:
+
+    [ 1][ 2][ 3][ 4][ 5][ 6][ 7][ 8]
+    [ 9][10][11][12][13][14][15][16]
+    [17][18][19][20][21][22][23][24]
+    [25][26][27][28][29][30][31][32]
+
+    pressing pad N:
+      → captures the current shift register state
+      → loops it every N osc2 zero-crossings
+      → lights all pads 1 through N green
+
+    pressing the last lit pad:
+      → releases the loop
+      → all pads go dark
+
+    the loop length is measured in osc2 crossings
+```
+
+press a pad to catch a moment. the shift register freezes into a pattern and repeats it.
+
+---
+
+## step buttons
+
+```
+    16 steps across the bottom of the machine:
+
+    [■][■][■][■][■][□][□][■][■][■][□][□][■][■][□][■]
+     1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16
+
+    ■ = gate open, sound passes
+    □ = gate closed, silence
+
+    press any step to toggle it.
+    they advance with the midi clock (24 ticks per beat).
+    without midi clock: every 4 osc2 crossings advances one step.
+```
+
+---
+
+## building
+
+docker desktop on mac or windows. docker engine on linux. the cross-compiler lives inside.
 
 ```bash
 ./scripts/build.sh
 ```
 
-Output: `dist/kwahzolin-module.tar.gz`
+output lands in `dist/kwahzolin-module.tar.gz`
 
-### Without Docker (native ARM64 or with cross-compiler)
+if you already have `aarch64-linux-gnu-gcc` on your machine:
 
 ```bash
 CROSS_PREFIX=aarch64-linux-gnu- ./scripts/build.sh
 ```
 
-## Installing
+---
+
+## installing
 
 ```bash
 ./scripts/install.sh
-# or
+# or specify the move's ip:
 MOVE_HOST=192.168.x.y ./scripts/install.sh
 ```
 
-The module installs to `/data/UserData/schwung/modules/sound_generators/kwahzolin/` on the device.
+the module goes to `/data/UserData/schwung/modules/sound_generators/kwahzolin/` on the device.
 
-## Sound Tips
+---
 
-- **Low chaos, slow Osc2**: melodic, almost sequencer-like — the rungler produces a small repeating set of values
-- **High chaos, fast Osc2**: rapid unpredictable evolution — use pads to lock a moment into a loop
-- **Loop + sequencer gate**: the repeating rungler pattern becomes a rhythmic groove with gate-driven articulation
-- **High resonance + high drive**: the filter screams; use Cutoff and Rungler Mod to shape the aggression
-- **Ring Mod above 50%**: metallic, clangorous overtones; combine with high resonance for industrial textures
+*v0.1.1*

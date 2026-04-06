@@ -2,7 +2,7 @@
   "id": "kwahzolin",
   "name": "Kwahzolin",
   "abbrev": "KW",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "capabilities": {
     "chainable": true,
     "component_type": "sound_generator",
@@ -14,22 +14,22 @@
           "knobs": [
             "osc1_rate",
             "osc2_rate",
-            "chaos",
-            "cutoff",
-            "resonance",
-            "drive",
-            "rungler_mod",
+            "osc_chaos",
+            "filter_cutoff",
+            "filter_resonance",
+            "filter_chaos",
+            "filter_drive",
             "ring_mod"
           ],
           "params": [
-            { "key": "osc1_rate",   "label": "Osc1 Rate"   },
-            { "key": "osc2_rate",   "label": "Osc2 Rate"   },
-            { "key": "chaos",       "label": "Chaos"        },
-            { "key": "cutoff",      "label": "Cutoff"       },
-            { "key": "resonance",   "label": "Resonance"    },
-            { "key": "drive",       "label": "Drive"        },
-            { "key": "rungler_mod", "label": "Rungler Mod"  },
-            { "key": "ring_mod",    "label": "Ring Mod"     }
+            { "key": "osc1_rate",         "label": "Osc 1 Frequency"  },
+            { "key": "osc2_rate",         "label": "Osc 2 Frequency"  },
+            { "key": "osc_chaos",         "label": "Osc Chaos"        },
+            { "key": "filter_cutoff",     "label": "Filter Cutoff"    },
+            { "key": "filter_resonance",  "label": "Filter Resonance" },
+            { "key": "filter_chaos",      "label": "Filter Chaos"     },
+            { "key": "filter_drive",      "label": "Filter Drive"     },
+            { "key": "ring_mod",          "label": "Ring Modulation"  }
           ]
         }
       }
