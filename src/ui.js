@@ -12,9 +12,9 @@
  *
  * Display layout (128×64, 1-bit):
  *   Glitch layer   scattered blocks reacting to Osc Chaos + Filter Chaos
+ *   y=0            top-right corner: "L:N" loop hint when loop is active
  *   y=25..38       "KWAHZOLIN" in 5×7 pixel font at scale 2 (fill_rect)
  *                  (or knob name + value when a knob is being turned)
- *   y=42           Loop status: "FREE" or "LOOP Nsteps"
  *   y=52..62       16 step sequencer blocks (7×11 px each, 8px pitch)
  */
 
@@ -40,9 +40,9 @@ const KNOB_COUNT    = 8;
 const KNOB_KEYS  = ['osc1_rate',  'osc2_rate',  'osc_chaos',     'filter_cutoff',
                     'filter_resonance', 'filter_chaos', 'filter_drive', 'ring_mod'];
 
-/* Short names shown in display during knob feedback */
-const KNOB_NAMES = ['Osc 1', 'Osc 2', 'OscCha', 'Cutoff',
-                    'Resona', 'FltCha', 'FltDrv', 'RingMd'];
+/* Full names shown in display during knob feedback */
+const KNOB_NAMES = ['Osc 1 Frequency', 'Osc 2 Frequency', 'Osc Chaos',      'Filter Cutoff',
+                    'Filter Resonance', 'Filter Chaos',    'Filter Drive',   'Ring Modulation'];
 
 /* Default knob values 0–127 matching DSP defaults */
 const KNOB_DEFAULTS = [25, 19, 64, 64, 38, 64, 25, 0];
@@ -109,7 +109,6 @@ const CHAR_GAP   = 2;
 const TITLE_W    = TITLE_STR.length * CHAR_W + (TITLE_STR.length - 1) * CHAR_GAP; /* 106px */
 const TITLE_X    = (128 - TITLE_W) >> 1;                                /* 11px */
 const TITLE_Y    = 25;   /* centered vertically on the 128×64 display  */
-const STATUS_Y   = 42;
 const STEPS_Y    = 52;
 const STEPS_H    = 11;
 
@@ -132,7 +131,6 @@ let activePadIndex  = -1;   /* -1 = free running, 0–31 = loop active */
 let stepMask        = 0xFFFF;
 
 let displayDirty    = true;
-let prevStatus      = '';
 let prevStepMask    = -1;
 
 /* Progressive LED init */
@@ -329,24 +327,14 @@ function drawStepSequencer() {
  * Display — main draw
  * ==================================================================== */
 
-function buildStatus() {
-    if (activePadIndex >= 0) {
-        return `LOOP ${activePadIndex + 1}steps`;
-    }
-    return 'FREE';
-}
-
 function drawUI() {
     /* Combined chaos level drives the glitch intensity */
     const chaos    = (knobValues[2] + knobValues[5]) / 254.0;
     const glitchOn = chaos > 0.02;
-    const status   = buildStatus();
     const smask    = stepMask;
 
     /* Skip redraw if nothing changed and no glitch animation running */
-    if (!displayDirty && !glitchOn
-        && status === prevStatus
-        && smask  === prevStepMask) {
+    if (!displayDirty && !glitchOn && smask === prevStepMask) {
         return;
     }
 
@@ -363,13 +351,14 @@ function drawUI() {
         drawTitle();
     }
 
-    /* Loop status line */
-    print(2, STATUS_Y, status, 1);
+    /* Corner loop hint: small "L:N" at top-right when loop is active */
+    if (activePadIndex >= 0) {
+        print(100, 1, `L:${activePadIndex + 1}`, 1);
+    }
 
     /* Step sequencer row */
     drawStepSequencer();
 
-    prevStatus   = status;
     prevStepMask = smask;
     displayDirty = false;
 }

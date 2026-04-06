@@ -5,9 +5,9 @@
  *   Osc1 (triangle, freq modulated by rungler CV × Osc Chaos)  → soft clip
  *   Osc2 (triangle, free-running; clocks the rungler)          → soft clip
  *   XOR-style mix of Osc1 + Osc2                               → soft clip
- *   Ring mod: Osc1 × Osc2 blended via Ring Modulation knob     → soft clip
- *   Filter Drive: tanh saturation at filter input
- *   Benjolin 2-pole lowpass: saturated resonance feedback, pings at high res
+ *   Ring mod: Osc1 × Osc2 blended via Ring Modulation knob (true bipolar)
+ *   Chamberlin SVF: feedback = Q*band; hp = driven - low - feedback;
+ *                   band += F*hp; low += F*band; output = tanh(low)
  *   Sequencer gate (16-step, MIDI-clock or Osc2 fallback)
  *   Final output clip
  *
@@ -113,10 +113,9 @@ typedef struct {
     int      osc2_cross_count;
     int      gate_on;
 
-    /* Benjolin 2-pole lowpass filter state */
-    float filt_low1;     /* first pole integrator */
-    float filt_low2;     /* second pole integrator */
-    float filt_band;     /* first pole output, used as resonance feedback source */
+    /* Chamberlin SVF filter state */
+    float filt_low;      /* lowpass integrator */
+    float filt_band;     /* bandpass integrator (resonance source) */
     float filt_f;        /* cached integrator coefficient, updated at crossings */
 
     /* Target parameters [0, 1] — written by set_param */
@@ -365,14 +364,14 @@ static void kwahzolin_render_block(void *inst, int16_t *out_lr, int frames) {
      * This eliminates clicks from knob turns without affecting the rungler-
      * driven cutoff jumps, which are updated per-crossing and produce the
      * characteristic Benjolin ping. */
-    k->s_osc1_rate        += (k->p_osc1_rate        - k->s_osc1_rate)        * k->sm_vslow;
-    k->s_osc2_rate        += (k->p_osc2_rate        - k->s_osc2_rate)        * k->sm_vslow;
+    k->s_osc1_rate        += (k->p_osc1_rate        - k->s_osc1_rate)        * k->sm_slow;
+    k->s_osc2_rate        += (k->p_osc2_rate        - k->s_osc2_rate)        * k->sm_slow;
     k->s_osc_chaos        += (k->p_osc_chaos        - k->s_osc_chaos)        * k->sm_slow;
-    k->s_filter_cutoff    += (k->p_filter_cutoff    - k->s_filter_cutoff)    * k->sm_med;
-    k->s_filter_resonance += (k->p_filter_resonance - k->s_filter_resonance) * k->sm_med;
-    k->s_filter_chaos     += (k->p_filter_chaos     - k->s_filter_chaos)     * k->sm_fast;
-    k->s_filter_drive     += (k->p_filter_drive     - k->s_filter_drive)     * k->sm_med;
-    k->s_ring_mod         += (k->p_ring_mod         - k->s_ring_mod)         * k->sm_med;
+    k->s_filter_cutoff    += (k->p_filter_cutoff    - k->s_filter_cutoff)    * k->sm_slow;
+    k->s_filter_resonance += (k->p_filter_resonance - k->s_filter_resonance) * k->sm_slow;
+    k->s_filter_chaos     += (k->p_filter_chaos     - k->s_filter_chaos)     * k->sm_slow;
+    k->s_filter_drive     += (k->p_filter_drive     - k->s_filter_drive)     * k->sm_slow;
+    k->s_ring_mod         += (k->p_ring_mod         - k->s_ring_mod)         * k->sm_slow;
 
     /* Refresh filter coefficient from smoothed knob values */
     update_filt_f(k);
@@ -382,10 +381,10 @@ static void kwahzolin_render_block(void *inst, int16_t *out_lr, int frames) {
     float osc1_base_freq  = param_to_osc_freq(k->s_osc1_rate);
     float osc1_chaos_gain = k->s_osc_chaos * 1.8f;
 
-    /* Resonance 0→4.5: self-oscillates comfortably above ~0.7, pings freely at 1.0 */
-    float res_amt  = k->s_filter_resonance * 4.5f;
+    /* SVF Q 0→2.1: resonance builds toward self-oscillation at top */
+    float q_amt   = k->s_filter_resonance * 2.1f;
     /* Drive 1→16×: light dirt at low end, heavy saturation at top */
-    float drv_amt  = 1.0f + k->s_filter_drive * 15.0f;
+    float drv_amt = 1.0f + k->s_filter_drive * 15.0f;
     float ring_amt = k->s_ring_mod;
 
     k->samples_no_clock += frames;
@@ -449,30 +448,30 @@ static void kwahzolin_render_block(void *inst, int16_t *out_lr, int frames) {
         float sig = o1 * 0.6f + o2 * 0.4f;
         sig = soft_clip(sig);
 
-        /* Ring mod: Osc1 × Osc2 blended via Ring Modulation knob */
+        /* Ring mod: true bipolar Osc1 × Osc2, no extra distortion */
         if (ring_amt > 0.001f) {
             sig = sig * (1.0f - ring_amt) + (o1 * o2) * ring_amt;
-            sig = soft_clip(sig);
         }
 
-        /* ---- Benjolin 2-pole lowpass with saturated resonance feedback --
+        /* ---- Chamberlin SVF (state-variable filter) -----------------------
          *
-         * driven   = tanh(sig × drive)           — input saturation
-         * feedback = tanh(filt_band × resonance)  — bounded resonance loop
-         * low1    += f × (driven − low1 + feedback)  — pole 1
-         * low2    += f × (low1   − low2)              — pole 2
-         * filt_band = low1  (first-pole output, resonance source)
+         * feedback     = Q × band                — resonant feedback tap
+         * input_driven = tanh((sig + feedback) × drive) — drive at input
+         * hp           = input_driven − low − feedback   — highpass output
+         * band        += F × hp                  — bandpass integrator
+         * low         += F × band                — lowpass integrator
+         * output       = tanh(low)
          *
-         * At high resonance the filter self-oscillates. An abrupt filt_f
-         * change (from a rungler step) excites the resonance, causing the
-         * filter to ring at the new cutoff frequency — the Benjolin ping. */
-        float driven   = tanhf(sig * drv_amt);
-        float feedback = tanhf(k->filt_band * res_amt);
-        k->filt_low1  += k->filt_f * (driven - k->filt_low1 + feedback);
-        k->filt_low2  += k->filt_f * (k->filt_low1 - k->filt_low2);
-        k->filt_band   = k->filt_low1;
+         * This topology produces true resonant pinging. An abrupt filt_f
+         * change (from a rungler step) excites the bandpass path, causing
+         * the filter to ring at the new cutoff — the Benjolin ping. */
+        float feedback     = q_amt * k->filt_band;
+        float input_driven = tanhf((sig + feedback) * drv_amt);
+        float hp           = input_driven - k->filt_low - feedback;
+        k->filt_band      += k->filt_f * hp;
+        k->filt_low       += k->filt_f * k->filt_band;
 
-        float filtered = tanhf(k->filt_low2 * 0.8f);
+        float filtered = tanhf(k->filt_low);
 
         /* Sequencer gate: step ON = pass audio, step OFF = silence */
         float gated = k->gate_on ? filtered : 0.0f;
