@@ -1,14 +1,14 @@
 /*
- * Kwahzolin — JavaScript UI
+ * kwahzolin v0.1.4 — JavaScript UI
  *
- * Autonomous Benjolin synthesizer. 8 knobs only.
+ * Fully autonomous Benjolin synthesizer. 8 knobs only.
  * No pads. No LEDs. No sequencer. No MIDI notes.
  *
  * Knobs (CC 71–78):
  *   1: Osc 1 Frequency    5: Filter Resonance
- *   2: Osc 2 Frequency    6: Filter Chaos
- *   3: Osc Chaos          7: Filter Drive
- *   4: Filter Cutoff      8: Ring Modulation
+ *   2: Osc 2 Frequency    6: Filter Drive
+ *   3: Osc Chaos          7: Filter Chaos
+ *   4: Filter Cutoff      8: Loop
  *
  * Display (128×64):
  *   Large "KWAHZOLIN" pixel title — normally.
@@ -26,17 +26,26 @@ const KNOB_CC_BASE = MoveKnob1;   /* 71 */
 const KNOB_COUNT   = 8;
 
 const KNOB_KEYS = [
-    'osc1_rate',  'osc2_rate',  'osc_chaos',     'filter_cutoff',
-    'filter_resonance', 'filter_chaos', 'filter_drive', 'ring_mod'
+    'osc1_freq', 'osc2_freq', 'osc_chaos', 'filter_cutoff',
+    'filter_resonance', 'filter_drive', 'filter_chaos', 'loop'
 ];
 
 const KNOB_NAMES = [
     'Osc 1 Frequency', 'Osc 2 Frequency', 'Osc Chaos',      'Filter Cutoff',
-    'Filter Resonance', 'Filter Chaos',    'Filter Drive',   'Ring Modulation'
+    'Filter Resonance', 'Filter Drive',    'Filter Chaos',   'Loop'
 ];
 
-/* Default knob positions 0–127, matching DSP defaults */
-const KNOB_DEFAULTS = [25, 19, 64, 64, 38, 64, 25, 0];
+/* Default knob positions 0–127, matching DSP defaults:
+ *   110 Hz  → p≈0.386 → 49
+ *   170 Hz  → p≈0.456 → 58
+ *   chaos   0.3       → 38
+ *   800 Hz  → p=0.5   → 64
+ *   res     0.5       → 64
+ *   drive   0.2       → 25
+ *   fchaos  0.4       → 51
+ *   loop    0.0       → 0
+ */
+const KNOB_DEFAULTS = [49, 58, 38, 64, 64, 25, 51, 0];
 
 /* Ticks to show knob feedback (~2 sec @ ~44 Hz tick rate) */
 const FEEDBACK_TICKS = 88;
@@ -65,7 +74,7 @@ const CHAR_H     = 7 * CHAR_SCALE;                                       /* 14px
 const CHAR_GAP   = 2;
 const TITLE_W    = TITLE_STR.length * CHAR_W + (TITLE_STR.length - 1) * CHAR_GAP;
 const TITLE_X    = Math.floor((128 - TITLE_W) / 2);
-const TITLE_Y    = Math.floor((64  - CHAR_H)  / 2);                     /* vertically centered */
+const TITLE_Y    = Math.floor((64  - CHAR_H)  / 2);
 
 /* ====================================================================
  * State

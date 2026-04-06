@@ -1,19 +1,24 @@
 /*
- * kwahzolin — Benjolin-style chaotic synthesizer for Ableton Move
+ * kwahzolin v0.1.4 — Benjolin clone for Ableton Move
  *
- * Autonomous — ignores all MIDI. 8 knobs only.
+ * Fully autonomous. No MIDI input. 8 knobs only.
  *
  * Signal chain:
- *   Osc1 (triangle, modulated by rungler CV × Osc Chaos)
- *   Osc2 (triangle, modulated by rungler CV × Osc Chaos; clocks rungler)
- *   Rungler: 8-bit shift register, clocked by Osc2 positive zero-crossings
- *            new bit = Osc1 sign; CV = weighted bit sum (recent bits heavier)
- *   XOR: Osc1_pulse XOR Osc2_pulse → primary audio signal
- *   Ring mod: Osc1 × Osc2, blended with XOR via Ring Modulation knob
- *   SVF lowpass: tanh drive at input, tanh resonant feedback
- *                cutoff = base + rungler_cv × Filter Chaos range
- *                abrupt cutoff jump on each rungler clock → filter PING
- *   Output: tanh(low × 1.5) scaled to int16
+ *   Osc1 (triangle) ─┐
+ *                     ├─→ rungler clock (Osc2 positive zero-crossing)
+ *   Osc2 (triangle) ─┘       shift left, insert bit from Osc1 sign
+ *                             rungler_cv = shift_reg / 255.0
+ *
+ *   Osc1, Osc2 frequencies both modulated by (rungler_cv × Osc Chaos)
+ *
+ *   XOR of Osc1/Osc2 pulse waves → primary audio
+ *   → SVF filter (Chamberlin), cutoff modulated by rungler_cv × Filter Chaos
+ *   → output
+ *
+ *   Loop knob: Turing Machine style
+ *     0.0 = fully random (new bit from Osc1 every clock)
+ *     0.5 = probabilistic (sequence slowly mutates)
+ *     1.0 = fully locked (register rotates, same pattern forever)
  */
 
 #include <stdio.h>
@@ -22,15 +27,14 @@
 #include <math.h>
 #include <stdint.h>
 
-#include "include/host/plugin_api_v1.h"
+#include "host/plugin_api_v1.h"
 
 /* ====================================================================
  * Constants
  * ==================================================================== */
 
-#define SAMPLE_RATE  44100.0f
-#define INV_SR       (1.0f / 44100.0f)
-#define ONE_PI       3.14159265359f
+#define KWAH_SR    44100.0f
+#define KWAH_PI    3.14159265359f
 
 /* ====================================================================
  * Utilities
@@ -40,78 +44,60 @@ static inline float clampf(float x, float lo, float hi) {
     return x < lo ? lo : (x > hi ? hi : x);
 }
 
-/* Osc frequency: 10 Hz to 5000 Hz, logarithmic */
-static inline float param_to_osc_freq(float p) {
-    return 10.0f * powf(500.0f, p);
+/* Logarithmic mapping: p in [0,1] → 10 Hz to 5000 Hz */
+static inline float param_to_osc_hz(float p) {
+    return 10.0f * powf(500.0f, clampf(p, 0.0f, 1.0f));
 }
 
-/* Filter base cutoff: 80 Hz to 8000 Hz, logarithmic */
-static inline float param_to_cutoff(float p) {
-    return 80.0f * powf(100.0f, p);
-}
-
-/* Chamberlin SVF integrator coefficient */
-static inline float hz_to_F(float fc) {
-    fc = clampf(fc, 20.0f, 18000.0f);
-    float f = 2.0f * sinf(ONE_PI * fc * INV_SR);
-    return clampf(f, 0.001f, 0.999f);
-}
-
-/* Rungler CV: weighted bit sum — bit0 (most recent) weight=1.0, bit7 weight=1/128
- * Output normalized to [0, 1]. */
-static inline float calc_rungler_cv(uint8_t reg) {
-    float cv = 0.0f, weight = 1.0f, total = 0.0f;
-    for (int i = 0; i < 8; i++) {
-        cv    += ((reg >> i) & 1) * weight;
-        total += weight;
-        weight *= 0.5f;
-    }
-    return cv / total;
+/* Logarithmic mapping: p in [0,1] → 80 Hz to 8000 Hz */
+static inline float param_to_cutoff_hz(float p) {
+    return 80.0f * powf(100.0f, clampf(p, 0.0f, 1.0f));
 }
 
 /* ====================================================================
- * Instance state
+ * Instance struct
  * ==================================================================== */
 
 typedef struct {
-    /* Oscillator phases [0, 1) */
+    /* Oscillator state */
     float osc1_phase;
     float osc2_phase;
-    float osc2_prev;    /* previous Osc2 sample for zero-crossing detection */
+    float osc2_prev;        /* previous Osc2 sample, for zero-crossing detection */
 
-    /* Rungler */
+    /* Rungler state */
     uint8_t shift_reg;
-    float   rungler_cv;
+    float   rungler_cv;     /* shift_reg / 255.0, range [0, 1] */
 
-    /* SVF filter state */
-    float filt_low;
-    float filt_band;
+    /* Filter state */
+    float svf_lp;
+    float svf_bp;
 
-    /* Target parameters [0, 1] — written by set_param */
-    float p_osc1_rate;
-    float p_osc2_rate;
+    /* Target parameters — written by set_param, values vary by knob:
+     *   osc1_freq / osc2_freq / filter_cutoff : stored in Hz
+     *   all others                            : stored as 0.0–1.0    */
+    float t_osc1_freq;
+    float t_osc2_freq;
+    float t_osc_chaos;
+    float t_filter_cutoff;
+    float t_filter_resonance;
+    float t_filter_drive;
+    float t_filter_chaos;
+    float t_loop;
+
+    /* IIR-smoothed parameters, updated every render_block */
+    float p_osc1_freq;
+    float p_osc2_freq;
     float p_osc_chaos;
     float p_filter_cutoff;
     float p_filter_resonance;
-    float p_filter_chaos;
     float p_filter_drive;
-    float p_ring_mod;
+    float p_filter_chaos;
+    float p_loop;
 
-    /* IIR-smoothed parameters — updated per-block in render_block */
-    float s_osc1_rate;
-    float s_osc2_rate;
-    float s_osc_chaos;
-    float s_filter_cutoff;
-    float s_filter_resonance;
-    float s_filter_chaos;
-    float s_filter_drive;
-    float s_ring_mod;
+    /* IIR smoothing coefficient
+     * = 1 - exp(-1 / (KWAH_SR * 0.015)) for ~15ms per-sample time constant */
+    float smooth_coeff;
 
-    /* Block-rate IIR smoothing coefficient (~15ms)
-     * coeff = 1 - exp(-FRAMES_PER_BLOCK / (SAMPLE_RATE * 0.015)) */
-    float sm_coeff;
-
-    const host_api_v1_t *host;
 } kwahzolin_t;
 
 /* ====================================================================
@@ -130,32 +116,33 @@ static void *kwahzolin_create(const char *module_dir, const char *json_defaults)
     kwahzolin_t *k = (kwahzolin_t *)calloc(1, sizeof(kwahzolin_t));
     if (!k) return NULL;
 
-    k->sm_coeff = 1.0f - expf(-(float)MOVE_FRAMES_PER_BLOCK / (SAMPLE_RATE * 0.015f));
+    /* IIR coefficient — per-sample 15ms time constant */
+    k->smooth_coeff = 1.0f - expf(-1.0f / (KWAH_SR * 0.015f));
 
-    /* Parameter defaults */
-    k->p_osc1_rate        = 0.20f;
-    k->p_osc2_rate        = 0.15f;
-    k->p_osc_chaos        = 0.50f;
-    k->p_filter_cutoff    = 0.50f;
-    k->p_filter_resonance = 0.30f;
-    k->p_filter_chaos     = 0.50f;
-    k->p_filter_drive     = 0.20f;
-    k->p_ring_mod         = 0.00f;
+    /* Target parameter defaults */
+    k->t_osc1_freq        = 110.0f;  /* Hz */
+    k->t_osc2_freq        = 170.0f;  /* Hz */
+    k->t_osc_chaos        = 0.3f;
+    k->t_filter_cutoff    = 800.0f;  /* Hz */
+    k->t_filter_resonance = 0.5f;
+    k->t_filter_drive     = 0.2f;
+    k->t_filter_chaos     = 0.4f;
+    k->t_loop             = 0.0f;
 
-    /* Initialize smoothed values to match targets — no startup ramp */
-    k->s_osc1_rate        = k->p_osc1_rate;
-    k->s_osc2_rate        = k->p_osc2_rate;
-    k->s_osc_chaos        = k->p_osc_chaos;
-    k->s_filter_cutoff    = k->p_filter_cutoff;
-    k->s_filter_resonance = k->p_filter_resonance;
-    k->s_filter_chaos     = k->p_filter_chaos;
-    k->s_filter_drive     = k->p_filter_drive;
-    k->s_ring_mod         = k->p_ring_mod;
+    /* Initialize smoothed values = targets, no startup ramp */
+    k->p_osc1_freq        = k->t_osc1_freq;
+    k->p_osc2_freq        = k->t_osc2_freq;
+    k->p_osc_chaos        = k->t_osc_chaos;
+    k->p_filter_cutoff    = k->t_filter_cutoff;
+    k->p_filter_resonance = k->t_filter_resonance;
+    k->p_filter_drive     = k->t_filter_drive;
+    k->p_filter_chaos     = k->t_filter_chaos;
+    k->p_loop             = k->t_loop;
 
+    /* Rungler starting state — 0xA5 = 1010 0101 */
     k->shift_reg  = 0xA5;
-    k->rungler_cv = calc_rungler_cv(k->shift_reg);
+    k->rungler_cv = k->shift_reg / 255.0f;
 
-    k->host = g_host;
     return k;
 }
 
@@ -164,7 +151,7 @@ static void kwahzolin_destroy(void *inst) {
 }
 
 /* ====================================================================
- * Plugin API v2 — MIDI (ignored — kwahzolin is fully autonomous)
+ * Plugin API v2 — MIDI (fully ignored — kwahzolin is autonomous)
  * ==================================================================== */
 
 static void kwahzolin_on_midi(void *inst, const uint8_t *msg, int len, int source) {
@@ -179,49 +166,62 @@ static void kwahzolin_set_param(void *inst, const char *key, const char *val) {
     kwahzolin_t *k = (kwahzolin_t *)inst;
     if (!k || !key || !val) return;
 
-    float f = clampf((float)atof(val), 0.0f, 1.0f);
+    float f = (float)atof(val);
 
-    if      (!strcmp(key, "osc1_rate"))        k->p_osc1_rate        = f;
-    else if (!strcmp(key, "osc2_rate"))        k->p_osc2_rate        = f;
-    else if (!strcmp(key, "osc_chaos"))        k->p_osc_chaos        = f;
-    else if (!strcmp(key, "filter_cutoff"))    k->p_filter_cutoff    = f;
-    else if (!strcmp(key, "filter_resonance")) k->p_filter_resonance = f;
-    else if (!strcmp(key, "filter_chaos"))     k->p_filter_chaos     = f;
-    else if (!strcmp(key, "filter_drive"))     k->p_filter_drive     = f;
-    else if (!strcmp(key, "ring_mod"))         k->p_ring_mod         = f;
+    /* Frequency knobs: incoming 0–1 float → Hz via log mapping */
+    if (!strcmp(key, "osc1_freq")) {
+        k->t_osc1_freq = param_to_osc_hz(f);
+    } else if (!strcmp(key, "osc2_freq")) {
+        k->t_osc2_freq = param_to_osc_hz(f);
+    } else if (!strcmp(key, "filter_cutoff")) {
+        k->t_filter_cutoff = param_to_cutoff_hz(f);
+
+    /* Dimensionless knobs: store as 0–1 */
+    } else if (!strcmp(key, "osc_chaos")) {
+        k->t_osc_chaos = clampf(f, 0.0f, 1.0f);
+    } else if (!strcmp(key, "filter_resonance")) {
+        k->t_filter_resonance = clampf(f, 0.0f, 1.0f);
+    } else if (!strcmp(key, "filter_drive")) {
+        k->t_filter_drive = clampf(f, 0.0f, 1.0f);
+    } else if (!strcmp(key, "filter_chaos")) {
+        k->t_filter_chaos = clampf(f, 0.0f, 1.0f);
+    } else if (!strcmp(key, "loop")) {
+        k->t_loop = clampf(f, 0.0f, 1.0f);
+    }
 }
 
 static int kwahzolin_get_param(void *inst, const char *key, char *buf, int buf_len) {
     kwahzolin_t *k = (kwahzolin_t *)inst;
     if (!k || !key || !buf || buf_len < 2) return -1;
 
-    if (!strcmp(key, "osc1_rate"))        return snprintf(buf, buf_len, "%.4f", k->p_osc1_rate);
-    if (!strcmp(key, "osc2_rate"))        return snprintf(buf, buf_len, "%.4f", k->p_osc2_rate);
-    if (!strcmp(key, "osc_chaos"))        return snprintf(buf, buf_len, "%.4f", k->p_osc_chaos);
-    if (!strcmp(key, "filter_cutoff"))    return snprintf(buf, buf_len, "%.4f", k->p_filter_cutoff);
-    if (!strcmp(key, "filter_resonance")) return snprintf(buf, buf_len, "%.4f", k->p_filter_resonance);
-    if (!strcmp(key, "filter_chaos"))     return snprintf(buf, buf_len, "%.4f", k->p_filter_chaos);
-    if (!strcmp(key, "filter_drive"))     return snprintf(buf, buf_len, "%.4f", k->p_filter_drive);
-    if (!strcmp(key, "ring_mod"))         return snprintf(buf, buf_len, "%.4f", k->p_ring_mod);
+    /* Return raw 0–1 values for display; frequency targets as Hz */
+    if (!strcmp(key, "osc1_freq"))        return snprintf(buf, buf_len, "%.4f", k->t_osc1_freq);
+    if (!strcmp(key, "osc2_freq"))        return snprintf(buf, buf_len, "%.4f", k->t_osc2_freq);
+    if (!strcmp(key, "osc_chaos"))        return snprintf(buf, buf_len, "%.4f", k->t_osc_chaos);
+    if (!strcmp(key, "filter_cutoff"))    return snprintf(buf, buf_len, "%.4f", k->t_filter_cutoff);
+    if (!strcmp(key, "filter_resonance")) return snprintf(buf, buf_len, "%.4f", k->t_filter_resonance);
+    if (!strcmp(key, "filter_drive"))     return snprintf(buf, buf_len, "%.4f", k->t_filter_drive);
+    if (!strcmp(key, "filter_chaos"))     return snprintf(buf, buf_len, "%.4f", k->t_filter_chaos);
+    if (!strcmp(key, "loop"))             return snprintf(buf, buf_len, "%.4f", k->t_loop);
 
     if (!strcmp(key, "chain_params")) {
         static const char *cp =
             "["
-            "{\"key\":\"osc1_rate\",\"name\":\"Osc 1 Frequency\","
-                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.2},"
-            "{\"key\":\"osc2_rate\",\"name\":\"Osc 2 Frequency\","
-                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.15},"
+            "{\"key\":\"osc1_freq\",\"name\":\"Osc 1 Frequency\","
+                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.386},"
+            "{\"key\":\"osc2_freq\",\"name\":\"Osc 2 Frequency\","
+                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.456},"
             "{\"key\":\"osc_chaos\",\"name\":\"Osc Chaos\","
-                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.5},"
+                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.3},"
             "{\"key\":\"filter_cutoff\",\"name\":\"Filter Cutoff\","
                 "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.5},"
             "{\"key\":\"filter_resonance\",\"name\":\"Filter Resonance\","
-                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.3},"
-            "{\"key\":\"filter_chaos\",\"name\":\"Filter Chaos\","
                 "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.5},"
             "{\"key\":\"filter_drive\",\"name\":\"Filter Drive\","
                 "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.2},"
-            "{\"key\":\"ring_mod\",\"name\":\"Ring Modulation\","
+            "{\"key\":\"filter_chaos\",\"name\":\"Filter Chaos\","
+                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.4},"
+            "{\"key\":\"loop\",\"name\":\"Loop\","
                 "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.0}"
             "]";
         int n = (int)strlen(cp);
@@ -248,103 +248,106 @@ static void kwahzolin_render_block(void *inst, int16_t *out_lr, int frames) {
     kwahzolin_t *k = (kwahzolin_t *)inst;
     if (!k) { memset(out_lr, 0, frames * 4); return; }
 
-    /* ---- Per-block IIR parameter smoothing (15ms) -------------------- */
-    const float sm = k->sm_coeff;
-    k->s_osc1_rate        += (k->p_osc1_rate        - k->s_osc1_rate)        * sm;
-    k->s_osc2_rate        += (k->p_osc2_rate        - k->s_osc2_rate)        * sm;
-    k->s_osc_chaos        += (k->p_osc_chaos        - k->s_osc_chaos)        * sm;
-    k->s_filter_cutoff    += (k->p_filter_cutoff    - k->s_filter_cutoff)    * sm;
-    k->s_filter_resonance += (k->p_filter_resonance - k->s_filter_resonance) * sm;
-    k->s_filter_chaos     += (k->p_filter_chaos     - k->s_filter_chaos)     * sm;
-    k->s_filter_drive     += (k->p_filter_drive     - k->s_filter_drive)     * sm;
-    k->s_ring_mod         += (k->p_ring_mod         - k->s_ring_mod)         * sm;
+    /* ---- IIR parameter smoothing — applied once per block ----------- */
+    const float sc = k->smooth_coeff;
+    k->p_osc1_freq        += (k->t_osc1_freq        - k->p_osc1_freq)        * sc;
+    k->p_osc2_freq        += (k->t_osc2_freq        - k->p_osc2_freq)        * sc;
+    k->p_osc_chaos        += (k->t_osc_chaos        - k->p_osc_chaos)        * sc;
+    k->p_filter_cutoff    += (k->t_filter_cutoff    - k->p_filter_cutoff)    * sc;
+    k->p_filter_resonance += (k->t_filter_resonance - k->p_filter_resonance) * sc;
+    k->p_filter_drive     += (k->t_filter_drive     - k->p_filter_drive)     * sc;
+    k->p_filter_chaos     += (k->t_filter_chaos     - k->p_filter_chaos)     * sc;
+    k->p_loop             += (k->t_loop             - k->p_loop)             * sc;
 
-    /* ---- Per-block constants ----------------------------------------- */
-    float osc1_base    = param_to_osc_freq(k->s_osc1_rate);
-    float osc2_base    = param_to_osc_freq(k->s_osc2_rate);
-    float chaos_gain   = k->s_osc_chaos * 2.0f;          /* depth: 0 = clean, 1 = ±2× FM */
-    float base_cutoff  = param_to_cutoff(k->s_filter_cutoff);
-    float chaos_range  = k->s_filter_chaos * 7920.0f;    /* 0..7920 Hz rungler sweep */
-    float res_q        = k->s_filter_resonance * 1.99f;  /* SVF Q 0.0..1.99 */
-    float drive_amt    = 1.0f + k->s_filter_drive * 9.0f; /* 1× clean .. 10× driven */
-    float ring_amt     = k->s_ring_mod;
+    /* ---- Per-block derived constants -------------------------------- */
+    const float damping    = 2.0f * (1.0f - k->p_filter_resonance * 0.99f);
+    const float drive_gain = 1.0f + k->p_filter_drive * 19.0f;
 
-    /* Compute initial filter F from current rungler CV */
-    float filt_cutoff = clampf(base_cutoff + k->rungler_cv * chaos_range, 20.0f, 18000.0f);
-    float F = hz_to_F(filt_cutoff);
+    /* Initial SVF coefficient from current rungler CV + smoothed params */
+    float cutoff_hz = clampf(
+        k->p_filter_cutoff + k->rungler_cv * k->p_filter_chaos * 4000.0f,
+        80.0f, 8000.0f
+    );
+    float svf_f = clampf(2.0f * sinf(KWAH_PI * cutoff_hz / KWAH_SR), 0.001f, 0.99f);
 
-    /* ---- Per-sample loop --------------------------------------------- */
+    /* ---- Per-sample loop -------------------------------------------- */
     for (int i = 0; i < frames; i++) {
 
-        /* Osc frequencies: base modulated by rungler CV × Osc Chaos
-         * Both oscillators track the same rungler CV */
-        float osc1_freq = clampf(osc1_base * (1.0f + chaos_gain * k->rungler_cv), 0.1f, 20000.0f);
-        float osc2_freq = clampf(osc2_base * (1.0f + chaos_gain * k->rungler_cv), 0.1f, 20000.0f);
+        /* --- Oscillator frequencies with rungler modulation --- */
+        float osc1_freq = k->p_osc1_freq * (1.0f + k->rungler_cv * k->p_osc_chaos * 2.0f);
+        float osc2_freq = k->p_osc2_freq * (1.0f + k->rungler_cv * k->p_osc_chaos * 2.0f);
+        osc1_freq = clampf(osc1_freq, 0.5f, 20000.0f);
+        osc2_freq = clampf(osc2_freq, 0.5f, 20000.0f);
 
-        /* Osc1: triangle wave, bipolar [-1, +1] */
-        float o1 = (k->osc1_phase < 0.5f)
+        /* --- Osc 1: triangle wave --- */
+        k->osc1_phase += osc1_freq / KWAH_SR;
+        if (k->osc1_phase >= 1.0f) k->osc1_phase -= 1.0f;
+        float osc1 = (k->osc1_phase < 0.5f)
             ? (4.0f * k->osc1_phase - 1.0f)
             : (3.0f - 4.0f * k->osc1_phase);
 
-        /* Osc2: triangle wave, bipolar [-1, +1] */
-        float o2 = (k->osc2_phase < 0.5f)
+        /* --- Osc 2: triangle wave --- */
+        k->osc2_phase += osc2_freq / KWAH_SR;
+        if (k->osc2_phase >= 1.0f) k->osc2_phase -= 1.0f;
+        float osc2 = (k->osc2_phase < 0.5f)
             ? (4.0f * k->osc2_phase - 1.0f)
             : (3.0f - 4.0f * k->osc2_phase);
 
-        /* Rungler: clock on Osc2 positive zero-crossing */
-        if (k->osc2_prev < 0.0f && o2 >= 0.0f) {
-            uint8_t new_bit = (o1 >= 0.0f) ? 1 : 0;
-            k->shift_reg    = ((k->shift_reg << 1) | new_bit) & 0xFF;
-            k->rungler_cv   = calc_rungler_cv(k->shift_reg);
+        /* --- Rungler: clock on Osc2 positive zero-crossing --- */
+        if (osc2 > 0.0f && k->osc2_prev <= 0.0f) {
+            uint8_t new_bit = (osc1 > 0.0f) ? 1 : 0;
+            uint8_t top_bit = (k->shift_reg >> 7) & 1;
+            uint8_t chosen;
 
-            /* Abrupt cutoff update → excites SVF band path → PING */
-            filt_cutoff = clampf(base_cutoff + k->rungler_cv * chaos_range, 20.0f, 18000.0f);
-            F = hz_to_F(filt_cutoff);
+            if (k->p_loop >= 0.99f) {
+                /* Fully locked: rotate, no new bits enter */
+                chosen = top_bit;
+            } else if (k->p_loop <= 0.01f) {
+                /* Fully random: always take new bit from Osc1 */
+                chosen = new_bit;
+            } else {
+                /* Probabilistic: higher loop = more likely to repeat */
+                float r = (float)rand() / (float)RAND_MAX;
+                chosen = (r < k->p_loop) ? top_bit : new_bit;
+            }
+
+            k->shift_reg  = ((k->shift_reg << 1) | chosen) & 0xFF;
+            k->rungler_cv = k->shift_reg / 255.0f;
+
+            /* Update SVF coefficient — abrupt change → filter PING */
+            cutoff_hz = clampf(
+                k->p_filter_cutoff + k->rungler_cv * k->p_filter_chaos * 4000.0f,
+                80.0f, 8000.0f
+            );
+            svf_f = clampf(2.0f * sinf(KWAH_PI * cutoff_hz / KWAH_SR), 0.001f, 0.99f);
         }
-        k->osc2_prev = o2;
+        k->osc2_prev = osc2;
 
-        /* XOR: Osc1 pulse XOR Osc2 pulse */
-        float pulse1  = (o1 >= 0.0f) ? 1.0f : -1.0f;
-        float pulse2  = (o2 >= 0.0f) ? 1.0f : -1.0f;
-        float xor_sig = (pulse1 != pulse2) ? 1.0f : -1.0f;
+        /* --- XOR: pulse1 XOR pulse2 --- */
+        float pulse1  = (osc1 > 0.0f) ? 1.0f : -1.0f;
+        float pulse2  = (osc2 > 0.0f) ? 1.0f : -1.0f;
+        float xor_out = (pulse1 != pulse2) ? 1.0f : -1.0f;
 
-        /* Ring mod: Osc1 × Osc2 (bipolar × bipolar = bipolar) */
-        float ring_sig = o1 * o2;
-
-        /* Pre-filter: XOR ↔ ring blend */
-        float pre_filter = xor_sig * (1.0f - ring_amt) + ring_sig * ring_amt;
-
-        /* ---- Chamberlin SVF lowpass ----------------------------------
+        /* --- Filter: Chamberlin SVF lowpass ---
          *
-         * driven   = tanh(pre_filter × drive)          — input saturation
-         * feedback = tanh(band × res_q × 2.0)          — bounded resonance
-         * hp       = driven − low − feedback            — highpass
-         * band    += F × hp                             — bandpass integrator
-         * low     += F × band                           — lowpass integrator
-         * output   = tanh(low × 1.5)
-         *
-         * At high res_q: abrupt F change (from rungler clock) excites the
-         * band integrator, which rings at the new cutoff — the Benjolin ping. */
-        float driven   = tanhf(pre_filter * drive_amt);
-        float feedback = tanhf(k->filt_band * res_q * 2.0f);
-        float hp       = driven - k->filt_low - feedback;
-        k->filt_band  += F * hp;
-        k->filt_low   += F * k->filt_band;
-        float filtered  = tanhf(k->filt_low * 1.5f);
+         * Drive at input, resonance via damping of BP,
+         * BP soft-limited to prevent DC runaway at extreme resonance.
+         * High resonance + high filter chaos → pings at every rungler step.
+         * High resonance alone → self-oscillates as sine at cutoff. */
+        float driven = tanhf(xor_out * drive_gain);
+        float hp     = driven - damping * k->svf_bp - k->svf_lp;
+        float new_bp = svf_f * hp + k->svf_bp;
+        new_bp       = clampf(tanhf(new_bp * 0.5f) * 2.0f, -3.0f, 3.0f);
+        float new_lp = svf_f * new_bp + k->svf_lp;
+        k->svf_bp = new_bp;
+        k->svf_lp = new_lp;
 
-        /* Scale to int16 */
-        int32_t s = (int32_t)(filtered * 25000.0f);
-        if (s >  32767) s =  32767;
-        if (s < -32768) s = -32768;
+        float filtered = tanhf(k->svf_lp * 0.6f);
 
-        out_lr[i * 2]     = (int16_t)s;
-        out_lr[i * 2 + 1] = (int16_t)s;
-
-        /* Advance oscillator phases */
-        k->osc1_phase += osc1_freq * INV_SR;
-        if (k->osc1_phase >= 1.0f) k->osc1_phase -= 1.0f;
-        k->osc2_phase += osc2_freq * INV_SR;
-        if (k->osc2_phase >= 1.0f) k->osc2_phase -= 1.0f;
+        /* --- Output --- */
+        int16_t sample = (int16_t)clampf(filtered * 28000.0f, -32767.0f, 32767.0f);
+        out_lr[i * 2]     = sample;
+        out_lr[i * 2 + 1] = sample;
     }
 }
 
