@@ -9,6 +9,28 @@
 #define KWAH_SR    44100.0f
 #define KWAH_PI    3.14159265359f
 
+#define LFO_COUNT          3
+#define LFO_SHAPE_TRIANGLE 0
+#define LFO_SHAPE_SINE     1
+#define LFO_SHAPE_SQUARE   2
+#define LFO_SHAPE_SAW      3
+#define LFO_SHAPE_SH       4
+#define LFO_SHAPE_WANDER   5
+
+#define LFO_TARGET_OSC1   0
+#define LFO_TARGET_OSC2   1
+#define LFO_TARGET_CHAOS  2
+#define LFO_TARGET_CUTOFF 3
+#define LFO_TARGET_RES    4
+#define LFO_TARGET_FCHAOS 5
+#define LFO_TARGET_RING   6
+#define LFO_TARGET_LOOP   7
+
+#define DIST_OFF       0
+#define DIST_OVERDRIVE 1
+#define DIST_HARD      2
+#define DIST_FUZZ      3
+
 static inline float clampf(float x, float lo, float hi) {
     return x < lo ? lo : (x > hi ? hi : x);
 }
@@ -20,6 +42,36 @@ static inline float param_to_osc_hz(float p) {
 static inline float param_to_cutoff_hz(float p) {
     return 20.0f * powf(400.0f, clampf(p, 0.0f, 1.0f));
 }
+
+static inline float apply_dist(float x, int type, float amount) {
+    if (type == DIST_OVERDRIVE) {
+        return tanhf(x * (1.0f + amount * 9.0f)) * 0.9f;
+    }
+    if (type == DIST_HARD) {
+        float d = x * (1.0f + amount * 19.0f);
+        if (d >  0.8f) d =  0.8f + (d - 0.8f) * 0.1f;
+        if (d < -0.8f) d = -0.8f + (d + 0.8f) * 0.1f;
+        return d * 0.8f;
+    }
+    if (type == DIST_FUZZ) {
+        float d = x * (1.0f + amount * 49.0f);
+        if (d >  0.5f) d =  0.5f;
+        if (d < -0.7f) d = -0.7f;
+        return d * 1.4f;
+    }
+    return x;
+}
+
+typedef struct {
+    float phase;
+    float rate;            /* Hz: 0.05-100 */
+    float amount;          /* 0.0-1.0 */
+    int   shape;           /* LFO_SHAPE_* */
+    int   target;          /* LFO_TARGET_* (0-7) */
+    float sh_value;        /* S&H: held random value */
+    float wander_target;   /* Wander: next random target */
+    float wander_current;  /* Wander: smoothed output */
+} lfo_t;
 
 typedef struct {
     float osc1_phase;
@@ -33,7 +85,6 @@ typedef struct {
     float svf_bp;
     float svf_f;
 
-    float lfo_phase;
     int   inject_flag;
     float inject_amount;
 
@@ -44,25 +95,34 @@ typedef struct {
     float cutoff_coeff;
     float hz_coeff;
 
+    /* Knob targets (raw, set by UI) */
     float t_osc1_freq;
     float t_osc2_freq;
     float t_osc_chaos;
     float t_filter_cutoff;
     float t_filter_resonance;
-    float t_filter_lfo;
     float t_filter_chaos;
+    float t_ring_mod;
     float t_loop;
 
+    /* IIR-smoothed knob values */
     float p_osc1_freq;
     float p_osc2_freq;
     float p_osc_chaos;
     float p_filter_cutoff;
     float p_filter_resonance;
-    float p_filter_lfo;
     float p_filter_chaos;
+    float p_ring_mod;
     float p_loop;
 
     float smooth_coeff;
+
+    /* LFOs — set directly, no IIR smoothing needed */
+    lfo_t lfo[LFO_COUNT];
+
+    /* Master distortion */
+    int   dist_type;   /* DIST_* */
+    float dist_amount; /* 0.0-1.0 */
 
 } kwahzolin_t;
 
@@ -83,8 +143,8 @@ static void *kwahzolin_create(const char *module_dir, const char *json_defaults)
     k->t_osc_chaos        = 0.3f;
     k->t_filter_cutoff    = 800.0f;
     k->t_filter_resonance = 0.5f;
-    k->t_filter_lfo       = 0.0f;
     k->t_filter_chaos     = 0.4f;
+    k->t_ring_mod         = 0.0f;
     k->t_loop             = 0.0f;
 
     k->p_osc1_freq        = k->t_osc1_freq;
@@ -92,8 +152,8 @@ static void *kwahzolin_create(const char *module_dir, const char *json_defaults)
     k->p_osc_chaos        = k->t_osc_chaos;
     k->p_filter_cutoff    = k->t_filter_cutoff;
     k->p_filter_resonance = k->t_filter_resonance;
-    k->p_filter_lfo       = k->t_filter_lfo;
     k->p_filter_chaos     = k->t_filter_chaos;
+    k->p_ring_mod         = k->t_ring_mod;
     k->p_loop             = k->t_loop;
 
     k->shift_reg          = 0xA5;
@@ -102,6 +162,19 @@ static void *kwahzolin_create(const char *module_dir, const char *json_defaults)
     k->prev_held_chaos_cv = 0.5f;
     k->cutoff_hz_smoothed = 800.0f;
     k->svf_f              = clampf(2.0f * sinf(KWAH_PI * 800.0f / KWAH_SR), 0.001f, 0.99f);
+
+    for (int i = 0; i < LFO_COUNT; i++) {
+        k->lfo[i].rate           = 0.5f;
+        k->lfo[i].amount         = 0.0f;
+        k->lfo[i].shape          = LFO_SHAPE_TRIANGLE;
+        k->lfo[i].target         = LFO_TARGET_CUTOFF;
+        k->lfo[i].sh_value       = 0.0f;
+        k->lfo[i].wander_target  = 0.0f;
+        k->lfo[i].wander_current = 0.0f;
+    }
+
+    k->dist_type   = DIST_OFF;
+    k->dist_amount = 0.0f;
 
     return k;
 }
@@ -112,6 +185,17 @@ static void kwahzolin_destroy(void *inst) {
 
 static void kwahzolin_on_midi(void *inst, const uint8_t *msg, int len, int source) {
     (void)inst; (void)msg; (void)len; (void)source;
+}
+
+/* Parse "lfo1_", "lfo2_", "lfo3_" prefix. Returns 0-2 index or -1.
+ * On match, *suffix points to the part after the underscore. */
+static int parse_lfo_prefix(const char *key, const char **suffix) {
+    if (strncmp(key, "lfo", 3) != 0) return -1;
+    int idx = key[3] - '1';
+    if (idx < 0 || idx > 2) return -1;
+    if (key[4] != '_') return -1;
+    *suffix = key + 5;
+    return idx;
 }
 
 static void kwahzolin_set_param(void *inst, const char *key, const char *val) {
@@ -130,12 +214,30 @@ static void kwahzolin_set_param(void *inst, const char *key, const char *val) {
         k->t_osc_chaos = clampf(f, 0.0f, 1.0f);
     } else if (!strcmp(key, "filter_resonance")) {
         k->t_filter_resonance = clampf(f, 0.0f, 1.0f);
-    } else if (!strcmp(key, "filter_lfo")) {
-        k->t_filter_lfo = clampf(f, 0.0f, 1.0f);
     } else if (!strcmp(key, "filter_chaos")) {
         k->t_filter_chaos = clampf(f, 0.0f, 1.0f);
+    } else if (!strcmp(key, "ring_mod")) {
+        k->t_ring_mod = clampf(f, 0.0f, 1.0f);
     } else if (!strcmp(key, "loop")) {
         k->t_loop = clampf(f, 0.0f, 1.0f);
+    } else if (!strcmp(key, "dist_type")) {
+        k->dist_type = (int)clampf(f, 0.0f, 3.0f);
+    } else if (!strcmp(key, "dist_amount")) {
+        k->dist_amount = clampf(f, 0.0f, 1.0f);
+    } else {
+        const char *suffix;
+        int idx = parse_lfo_prefix(key, &suffix);
+        if (idx >= 0) {
+            if (!strcmp(suffix, "rate")) {
+                k->lfo[idx].rate = clampf(f, 0.05f, 100.0f);
+            } else if (!strcmp(suffix, "amount")) {
+                k->lfo[idx].amount = clampf(f, 0.0f, 1.0f);
+            } else if (!strcmp(suffix, "shape")) {
+                k->lfo[idx].shape = (int)clampf(f, 0.0f, 5.0f);
+            } else if (!strcmp(suffix, "target")) {
+                k->lfo[idx].target = (int)clampf(f, 0.0f, 7.0f);
+            }
+        }
     }
 }
 
@@ -148,9 +250,20 @@ static int kwahzolin_get_param(void *inst, const char *key, char *buf, int buf_l
     if (!strcmp(key, "osc_chaos"))        return snprintf(buf, buf_len, "%.4f", k->t_osc_chaos);
     if (!strcmp(key, "filter_cutoff"))    return snprintf(buf, buf_len, "%.4f", k->t_filter_cutoff);
     if (!strcmp(key, "filter_resonance")) return snprintf(buf, buf_len, "%.4f", k->t_filter_resonance);
-    if (!strcmp(key, "filter_lfo"))       return snprintf(buf, buf_len, "%.4f", k->t_filter_lfo);
     if (!strcmp(key, "filter_chaos"))     return snprintf(buf, buf_len, "%.4f", k->t_filter_chaos);
+    if (!strcmp(key, "ring_mod"))         return snprintf(buf, buf_len, "%.4f", k->t_ring_mod);
     if (!strcmp(key, "loop"))             return snprintf(buf, buf_len, "%.4f", k->t_loop);
+    if (!strcmp(key, "dist_type"))        return snprintf(buf, buf_len, "%d",   k->dist_type);
+    if (!strcmp(key, "dist_amount"))      return snprintf(buf, buf_len, "%.4f", k->dist_amount);
+
+    const char *suffix;
+    int idx = parse_lfo_prefix(key, &suffix);
+    if (idx >= 0) {
+        if (!strcmp(suffix, "rate"))   return snprintf(buf, buf_len, "%.4f", k->lfo[idx].rate);
+        if (!strcmp(suffix, "amount")) return snprintf(buf, buf_len, "%.4f", k->lfo[idx].amount);
+        if (!strcmp(suffix, "shape"))  return snprintf(buf, buf_len, "%d",   k->lfo[idx].shape);
+        if (!strcmp(suffix, "target")) return snprintf(buf, buf_len, "%d",   k->lfo[idx].target);
+    }
 
     if (!strcmp(key, "chain_params")) {
         static const char *cp =
@@ -160,15 +273,15 @@ static int kwahzolin_get_param(void *inst, const char *key, char *buf, int buf_l
             "{\"key\":\"osc2_freq\",\"name\":\"Osc 2 Frequency\","
                 "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.456},"
             "{\"key\":\"osc_chaos\",\"name\":\"Osc Chaos\","
-                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.3},"
+                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.0},"
             "{\"key\":\"filter_cutoff\",\"name\":\"Filter Cutoff\","
                 "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.616},"
             "{\"key\":\"filter_resonance\",\"name\":\"Filter Resonance\","
-                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.5},"
-            "{\"key\":\"filter_lfo\",\"name\":\"Filter LFO\","
                 "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.0},"
             "{\"key\":\"filter_chaos\",\"name\":\"Filter Chaos\","
-                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.4},"
+                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.0},"
+            "{\"key\":\"ring_mod\",\"name\":\"Ring Modulation\","
+                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.0},"
             "{\"key\":\"loop\",\"name\":\"Loop\","
                 "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.0}"
             "]";
@@ -192,25 +305,124 @@ static void kwahzolin_render_block(void *inst, int16_t *out_lr, int frames) {
     kwahzolin_t *k = (kwahzolin_t *)inst;
     if (!k) { memset(out_lr, 0, frames * 4); return; }
 
+    /* Block-level IIR smoothing for knob parameters */
     const float sc = k->smooth_coeff;
     k->p_osc1_freq        += (k->t_osc1_freq        - k->p_osc1_freq)        * sc;
     k->p_osc2_freq        += (k->t_osc2_freq        - k->p_osc2_freq)        * sc;
     k->p_osc_chaos        += (k->t_osc_chaos        - k->p_osc_chaos)        * sc;
     k->p_filter_resonance += (k->t_filter_resonance - k->p_filter_resonance) * sc;
-    k->p_filter_lfo       += (k->t_filter_lfo       - k->p_filter_lfo)       * sc;
     k->p_filter_chaos     += (k->t_filter_chaos     - k->p_filter_chaos)     * sc;
+    k->p_ring_mod         += (k->t_ring_mod         - k->p_ring_mod)         * sc;
     k->p_loop             += (k->t_loop             - k->p_loop)             * sc;
 
+    /* Block-level filter coefficient (used when no resonance LFO active) */
     const float damping   = 2.0f * (1.0f - k->p_filter_resonance * 0.995f);
     const float bp_amount = k->p_filter_resonance * 0.7f;
     const float lp_amount = 1.0f - bp_amount;
+
+    /* Pre-compute Wander LFO smoothing coefficients once per block.
+     * coefficient = 1 - exp(-rate * 4 / SR) gives ~98% travel per cycle. */
+    float wander_coeff[LFO_COUNT];
+    for (int li = 0; li < LFO_COUNT; li++) {
+        wander_coeff[li] = 1.0f - expf(-k->lfo[li].rate * 4.0f / KWAH_SR);
+    }
 
     for (int i = 0; i < frames; i++) {
 
         k->p_filter_cutoff += (k->t_filter_cutoff - k->p_filter_cutoff) * k->cutoff_coeff;
 
-        float osc1_freq = clampf(k->p_osc1_freq * (1.0f + k->rungler_cv * k->p_osc_chaos * 2.0f), 0.5f, 20000.0f);
-        float osc2_freq = clampf(k->p_osc2_freq * (1.0f + k->rungler_cv * k->p_osc_chaos * 2.0f), 0.5f, 20000.0f);
+        /* --- LFO computation --- */
+        float lfo_osc1_mod   = 0.0f;
+        float lfo_osc2_mod   = 0.0f;
+        float lfo_chaos_mod  = 0.0f;
+        float lfo_cutoff_mod = 0.0f;
+        float lfo_res_mod    = 0.0f;
+        float lfo_fchaos_mod = 0.0f;
+        float lfo_ring_mod   = 0.0f;
+        float lfo_loop_mod   = 0.0f;
+
+        for (int li = 0; li < LFO_COUNT; li++) {
+            if (k->lfo[li].amount <= 0.0f) continue;
+
+            k->lfo[li].phase += k->lfo[li].rate / KWAH_SR;
+            int wrapped = (k->lfo[li].phase >= 1.0f);
+            if (wrapped) k->lfo[li].phase -= 1.0f;
+
+            float lfo_out;
+            switch (k->lfo[li].shape) {
+                case LFO_SHAPE_TRIANGLE:
+                    lfo_out = (k->lfo[li].phase < 0.5f)
+                        ? (4.0f * k->lfo[li].phase - 1.0f)
+                        : (3.0f - 4.0f * k->lfo[li].phase);
+                    break;
+                case LFO_SHAPE_SINE:
+                    lfo_out = sinf(2.0f * KWAH_PI * k->lfo[li].phase);
+                    break;
+                case LFO_SHAPE_SQUARE:
+                    lfo_out = (k->lfo[li].phase < 0.5f) ? 1.0f : -1.0f;
+                    break;
+                case LFO_SHAPE_SAW:
+                    lfo_out = 2.0f * k->lfo[li].phase - 1.0f;
+                    break;
+                case LFO_SHAPE_SH:
+                    if (wrapped) {
+                        k->lfo[li].sh_value =
+                            ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
+                    }
+                    lfo_out = k->lfo[li].sh_value;
+                    break;
+                case LFO_SHAPE_WANDER:
+                    if (wrapped) {
+                        k->lfo[li].wander_target =
+                            ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
+                    }
+                    k->lfo[li].wander_current +=
+                        (k->lfo[li].wander_target - k->lfo[li].wander_current)
+                        * wander_coeff[li];
+                    lfo_out = k->lfo[li].wander_current;
+                    break;
+                default:
+                    lfo_out = 0.0f;
+                    break;
+            }
+
+            float contrib = lfo_out * k->lfo[li].amount;
+            switch (k->lfo[li].target) {
+                case LFO_TARGET_OSC1:   lfo_osc1_mod   += contrib * 500.0f;  break;
+                case LFO_TARGET_OSC2:   lfo_osc2_mod   += contrib * 500.0f;  break;
+                case LFO_TARGET_CHAOS:  lfo_chaos_mod  += contrib * 0.5f;    break;
+                case LFO_TARGET_CUTOFF: lfo_cutoff_mod += contrib * 2000.0f; break;
+                case LFO_TARGET_RES:    lfo_res_mod    += contrib * 0.3f;    break;
+                case LFO_TARGET_FCHAOS: lfo_fchaos_mod += contrib * 0.5f;    break;
+                case LFO_TARGET_RING:   lfo_ring_mod   += contrib * 0.5f;    break;
+                case LFO_TARGET_LOOP:   lfo_loop_mod   += contrib * 0.5f;    break;
+            }
+        }
+
+        /* --- Effective parameter values (smoothed knob + LFO mod) --- */
+        float eff_osc_chaos    = clampf(k->p_osc_chaos    + lfo_chaos_mod,  0.0f, 1.0f);
+        float eff_filter_chaos = clampf(k->p_filter_chaos + lfo_fchaos_mod, 0.0f, 1.0f);
+        float eff_ring_mod     = clampf(k->p_ring_mod     + lfo_ring_mod,   0.0f, 1.0f);
+        float eff_loop         = clampf(k->p_loop         + lfo_loop_mod,   0.0f, 1.0f);
+
+        /* Resonance mod: recompute filter coefficients per-sample only when active */
+        float eff_damping   = damping;
+        float eff_bp_amount = bp_amount;
+        float eff_lp_amount = lp_amount;
+        if (lfo_res_mod != 0.0f) {
+            float eff_res = clampf(k->p_filter_resonance + lfo_res_mod, 0.0f, 0.995f);
+            eff_damping   = 2.0f * (1.0f - eff_res * 0.995f);
+            eff_bp_amount = eff_res * 0.7f;
+            eff_lp_amount = 1.0f - eff_bp_amount;
+        }
+
+        /* --- Oscillators --- */
+        float osc1_base = k->p_osc1_freq + lfo_osc1_mod;
+        float osc2_base = k->p_osc2_freq + lfo_osc2_mod;
+        float osc1_freq = clampf(osc1_base * (1.0f + k->rungler_cv * eff_osc_chaos * 2.0f),
+                                 0.5f, 20000.0f);
+        float osc2_freq = clampf(osc2_base * (1.0f + k->rungler_cv * eff_osc_chaos * 2.0f),
+                                 0.5f, 20000.0f);
 
         k->osc1_phase += osc1_freq / KWAH_SR;
         if (k->osc1_phase >= 1.0f) k->osc1_phase -= 1.0f;
@@ -224,24 +436,19 @@ static void kwahzolin_render_block(void *inst, int16_t *out_lr, int frames) {
             ? (4.0f * k->osc2_phase - 1.0f)
             : (3.0f - 4.0f * k->osc2_phase);
 
-        k->lfo_phase += 0.2f / KWAH_SR;
-        if (k->lfo_phase >= 1.0f) k->lfo_phase -= 1.0f;
-        float lfo_out = (k->lfo_phase < 0.5f)
-            ? (4.0f * k->lfo_phase - 1.0f)
-            : (3.0f - 4.0f * k->lfo_phase);
-
+        /* --- Rungler shift register --- */
         if (osc2 > 0.0f && k->osc2_prev <= 0.0f) {
             uint8_t new_bit = (osc1 > 0.0f) ? 1 : 0;
             uint8_t top_bit = (k->shift_reg >> 7) & 1;
             uint8_t chosen;
 
-            if (k->p_loop >= 0.99f) {
+            if (eff_loop >= 0.99f) {
                 chosen = top_bit;
-            } else if (k->p_loop <= 0.01f) {
+            } else if (eff_loop <= 0.01f) {
                 chosen = new_bit;
             } else {
                 float r = (float)rand() / (float)RAND_MAX;
-                chosen = (r < k->p_loop) ? top_bit : new_bit;
+                chosen = (r < eff_loop) ? top_bit : new_bit;
             }
 
             k->shift_reg  = ((k->shift_reg << 1) | chosen) & 0xFF;
@@ -254,38 +461,47 @@ static void kwahzolin_render_block(void *inst, int16_t *out_lr, int frames) {
         }
         k->osc2_prev = osc2;
 
-        float chaos_mod     = (k->chaos_held_cv - 0.5f) * 2.0f * k->p_filter_chaos * 3000.0f;
-        float lfo_mod       = lfo_out * k->p_filter_lfo * 2000.0f;
-        float raw_cutoff    = k->p_filter_cutoff + chaos_mod + lfo_mod;
+        /* --- Filter cutoff with chaos mod and LFO mod --- */
+        float chaos_mod  = (k->chaos_held_cv - 0.5f) * 2.0f * eff_filter_chaos * 3000.0f;
+        float raw_cutoff = k->p_filter_cutoff + chaos_mod + lfo_cutoff_mod;
         float cutoff_target = (k->p_filter_cutoff <= 20.5f)
                               ? 20.0f
                               : clampf(raw_cutoff, 20.0f, 8000.0f);
 
         k->cutoff_hz_smoothed += (cutoff_target - k->cutoff_hz_smoothed) * k->hz_coeff;
-        k->svf_f = clampf(2.0f * sinf(KWAH_PI * k->cutoff_hz_smoothed / KWAH_SR), 0.001f, 0.99f);
+        k->svf_f = clampf(2.0f * sinf(KWAH_PI * k->cutoff_hz_smoothed / KWAH_SR),
+                          0.001f, 0.99f);
 
+        /* --- Signal path (unchanged structure) --- */
         float pulse1  = (osc1 > 0.0f) ? 1.0f : -1.0f;
         float pulse2  = (osc2 > 0.0f) ? 1.0f : -1.0f;
         float xor_out = (pulse1 != pulse2) ? 1.0f : -1.0f;
 
-        float input_sig = xor_out;
+        float ring      = osc1 * osc2;
+        float sig       = xor_out * (1.0f - eff_ring_mod) + ring * eff_ring_mod;
+        float input_sig = sig;
         if (k->inject_flag) {
             input_sig += k->inject_amount * 2.0f;
             k->inject_flag = 0;
         }
         float driven = tanhf(input_sig * 2.5f);
 
-        float hp     = driven - damping * k->svf_bp - k->svf_lp;
+        float hp     = driven - eff_damping * k->svf_bp - k->svf_lp;
         float new_bp = k->svf_f * hp + k->svf_bp;
         new_bp       = clampf(tanhf(new_bp * 0.5f) * 2.0f, -3.0f, 3.0f);
         float new_lp = k->svf_f * new_bp + k->svf_lp;
         k->svf_bp = new_bp;
         k->svf_lp = new_lp;
 
-        float mixed    = (k->svf_lp * lp_amount) + (k->svf_bp * bp_amount);
+        float mixed    = (k->svf_lp * eff_lp_amount) + (k->svf_bp * eff_bp_amount);
         float filtered = tanhf(mixed * 0.6f);
 
-        int16_t sample = (int16_t)clampf(filtered * 28000.0f, -32767.0f, 32767.0f);
+        /* --- Master distortion (last stage before output) --- */
+        float final_out = (k->dist_type != DIST_OFF)
+            ? apply_dist(filtered, k->dist_type, k->dist_amount)
+            : filtered;
+
+        int16_t sample = (int16_t)clampf(final_out * 28000.0f, -32767.0f, 32767.0f);
         out_lr[i * 2]     = sample;
         out_lr[i * 2 + 1] = sample;
     }
