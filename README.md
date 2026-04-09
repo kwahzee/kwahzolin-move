@@ -66,16 +66,20 @@ a benjolin-inspired synthesizer module for the ableton move unofficial firmware 
 
 ## menu
 
-jog wheel scrolls. jog click selects or toggles edit mode. back button returns to main menu.
+jog wheel scrolls. jog click selects or enters edit mode. back returns to previous level.
+
+menu hierarchy: main → lfo → lfo 1/2/3 → settings. main → distortion → settings.
+
+when a row is selected for editing, `>` becomes `*`.
 
 ### lfo
 
-three lfos. each targets any of the 8 knob parameters at audio-rate resolution. shift + jog switches between lfo 1 / 2 / 3.
+three independent lfos. each targets any of the 8 knob parameters at audio-rate resolution. select lfo 1, 2, or 3 from the lfo selection screen.
 
 | property | range |
 |----------|-------|
-| shape    | triangle / sine / square / sawtooth / s&h / wander |
-| rate     | 0.05 hz – 100 hz |
+| shape    | triangle / sine / square / sawtooth / random |
+| rate     | 0.05 hz – 10.0 hz |
 | amount   | 0.0 – 1.0 |
 | target   | any of the 8 knobs |
 
@@ -124,4 +128,4 @@ output: `dist/kwahzolin-module.tar.gz`
 
 ---
 
-v0.2.2
+v0.2.3
