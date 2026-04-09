@@ -1,12 +1,10 @@
 # kwahzolin
 
-*a benjolin-inspired synthesizer module for the ableton move unofficial firmware [schwung](https://github.com/charlesvestal/schwung)*
+a benjolin-inspired synthesizer module for the ableton move unofficial firmware [schwung](https://github.com/charlesvestal/schwung)
 
 ---
 
 ```
-        ~~~  the rungler  ~~~
-
     osc2 ──▶ [clock] ──▶ [ 8 bit shift register ]
                               │
                          shift_reg / 255
@@ -25,41 +23,10 @@
 ---
 
 ```
-    ·  ·  ·  signal path  ·  ·  ·
-
     [osc1] ──▶ pulse ──▶ XOR ──▶ [filter] ──▶ out
     [osc2] ──▶ pulse ──┘               ▲
                                   rungler cv
 ```
-
----
-
-## filter
-
-state variable filter. damping controls resonance, band pass feeds back into hi pass. output mixes lo pass and band pass equally. at high resonance the filter self-oscillates as a sine at the cutoff.
-
-```
-         input
-           │
-         [tanh]
-           │
-         [hp] = driven − damping×band − low
-           │
-      ┌────┴────┐
-      │  band  ─┼──▶ band += F × hp  (soft-limited)
-      └────┬────┘
-      ┌────┴────┐
-      │   low  ─┼──▶ low  += F × band
-      └────┬────┘
-           │
-      50% low + 50% band
-           │
-         [tanh]
-           │
-          out
-```
-
-a slow triangle lfo (0.2 hz) runs always. filter lfo knob controls how much it sweeps the cutoff.
 
 ---
 
@@ -86,7 +53,7 @@ a slow triangle lfo (0.2 hz) runs always. filter lfo knob controls how much it s
 
 **filter lfo** — how much the slow internal lfo sweeps the cutoff. at zero the lfo has no effect. at maximum it swings up to 2000hz above the base cutoff in a 20-second triangle cycle.
 
-**filter chaos** — how much the rungler's accumulated pattern hurls the filter cutoff around. at high resonance + high filter chaos, every shift register step pings the filter at a different frequency.
+**filter chaos** — the rungler latches a new value on each osc 2 clock tick and holds it until the next.
 
 **loop** — turing machine style register control. at zero tm is fully random. at one tm is fully locked. in the middle tm slowly mutates.
 
@@ -122,4 +89,4 @@ the module goes to `/data/UserData/schwung/modules/sound_generators/kwahzolin/` 
 
 ---
 
-*v0.1.5*
+v0.1.6
