@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Build kwahzolin for Ableton Move (ARM64).
-# Automatically uses Docker for cross-compilation when not already inside a container.
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -10,7 +8,6 @@ IMAGE_NAME="kwahzolin-builder"
 REBUILD_DOCKER="${REBUILD_DOCKER:-0}"
 CROSS_PREFIX="${CROSS_PREFIX:-aarch64-linux-gnu-}"
 
-# ---- Use Docker unless we are already in a container or have CROSS_PREFIX set ----
 if [ -z "$CROSS_PREFIX_OVERRIDE" ] && [ ! -f "/.dockerenv" ]; then
     echo "=== Kwahzolin Build (via Docker) ==="
 
@@ -32,7 +29,6 @@ if [ -z "$CROSS_PREFIX_OVERRIDE" ] && [ ! -f "/.dockerenv" ]; then
     exit 0
 fi
 
-# ---- Actual build (inside Docker or with native cross-compiler) ----
 cd "$REPO_ROOT"
 
 if ! command -v "${CROSS_PREFIX}gcc" >/dev/null 2>&1; then
@@ -54,13 +50,11 @@ mkdir -p "dist/$MODULE_ID"
 
 echo "DSP compiled: dist/$MODULE_ID/dsp.so"
 
-# Copy JS / JSON module files
 cp src/module.json "dist/$MODULE_ID/"
 cp src/ui.js       "dist/$MODULE_ID/"
 
 echo "Module files copied."
 
-# Create release tarball
 cd dist
 tar -czf "${MODULE_ID}-module.tar.gz" "$MODULE_ID/"
 cd ..

@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# Deploy kwahzolin to Ableton Move over SSH.
-# Usage:
-#   ./scripts/install.sh            — install to move.local
-#   MOVE_HOST=192.168.x.y ./scripts/install.sh
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
