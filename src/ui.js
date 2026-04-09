@@ -8,14 +8,14 @@ const KNOB_COUNT   = 8;
 const CC_JOG_WHEEL = MoveMainKnob;
 const CC_JOG_CLICK = MoveMainButton;
 const CC_BACK      = MoveBack;
-const CC_SHIFT     = MoveShift;
 
-const STATE_MENU_MAIN    = 0;
-const STATE_MENU_LFO     = 1;
-const STATE_MENU_DIST    = 2;
-const STATE_KNOB_DISPLAY = 3;
+const STATE_MAIN         = 0;
+const STATE_LFO_SELECT   = 1;
+const STATE_LFO_SETTINGS = 2;
+const STATE_DISTORTION   = 3;
+const STATE_KNOB_DISPLAY = 4;
 
-const LFO_SHAPES  = ['Triangle', 'Sine', 'Square', 'Sawtooth', 'S&H', 'Wander'];
+const LFO_SHAPES  = ['Triangle', 'Sine', 'Square', 'Sawtooth', 'Random'];
 const LFO_TARGETS = [
     'Osc 1 Freq', 'Osc 2 Freq', 'Osc Chaos',
     'Filter Cutoff', 'Filter Res', 'Filter Chaos',
@@ -51,17 +51,16 @@ const FONT5x7 = {
 const TITLE_STR  = 'KWAHZOLIN';
 const CHAR_SCALE = 2;
 const CHAR_W     = 5 * CHAR_SCALE;
-const CHAR_H     = 7 * CHAR_SCALE;
 const CHAR_GAP   = 2;
 const TITLE_W    = TITLE_STR.length * CHAR_W + (TITLE_STR.length - 1) * CHAR_GAP;
 const TITLE_X    = Math.floor((128 - TITLE_W) / 2);
 
 const knobValues = [...KNOB_DEFAULTS];
 
-const lfo = [
-    { rate: 0.5, amount: 0.0, shape: 0, target: 3 },
-    { rate: 0.5, amount: 0.0, shape: 0, target: 3 },
-    { rate: 0.5, amount: 0.0, shape: 0, target: 3 },
+const lfoSettings = [
+    { shape: 0, rate: 0.5, amount: 0.0, target: 3 },
+    { shape: 0, rate: 0.5, amount: 0.0, target: 3 },
+    { shape: 0, rate: 0.5, amount: 0.0, target: 3 },
 ];
 
 let distEnabled = false;
@@ -69,18 +68,17 @@ let distType    = 1;
 let distAmount  = 0.0;
 let distMix     = 1.0;
 
-let state        = STATE_MENU_MAIN;
-let prevState    = STATE_MENU_MAIN;
-let mainSel      = 0;
-let lfoTab       = 0;
-let lfoSel       = 0;
-let lfoEditing   = false;
-let distSel      = 0;
-let distEditing  = false;
-let activeKnob   = -1;
-let knobTicks    = 0;
-let shiftHeld    = false;
-let displayDirty = true;
+let menuState         = STATE_MAIN;
+let prevMenuState     = STATE_MAIN;
+let mainCursor        = 0;
+let lfoSelectCursor   = 0;
+let activeLfo         = 0;
+let lfoSettingsCursor = 0;
+let distCursor        = 0;
+let editMode          = false;
+let activeKnob        = -1;
+let knobTicks         = 0;
+let displayDirty      = true;
 
 const KNOB_TIMEOUT_TICKS = 44;
 
@@ -90,10 +88,10 @@ function knobValuePct(i)    { return `${Math.round(knobValues[i] / 1.27)}%`; }
 
 function sendLfoParams(i) {
     const n = i + 1;
-    host_module_set_param(`lfo${n}_rate`,   lfo[i].rate.toFixed(4));
-    host_module_set_param(`lfo${n}_amount`, lfo[i].amount.toFixed(4));
-    host_module_set_param(`lfo${n}_shape`,  String(lfo[i].shape));
-    host_module_set_param(`lfo${n}_target`, String(lfo[i].target));
+    host_module_set_param(`lfo${n}_rate`,   lfoSettings[i].rate.toFixed(4));
+    host_module_set_param(`lfo${n}_amount`, lfoSettings[i].amount.toFixed(4));
+    host_module_set_param(`lfo${n}_shape`,  String(lfoSettings[i].shape));
+    host_module_set_param(`lfo${n}_target`, String(lfoSettings[i].target));
 }
 
 function sendDistParams() {
@@ -104,7 +102,7 @@ function sendDistParams() {
 
 function saveState() {
     const s = {
-        lfo: lfo.map(l => ({ rate: l.rate, amount: l.amount, shape: l.shape, target: l.target })),
+        lfo: lfoSettings.map(l => ({ rate: l.rate, amount: l.amount, shape: l.shape, target: l.target })),
         distEnabled,
         distType,
         distAmount,
@@ -121,10 +119,10 @@ function restoreState() {
         if (s.lfo && Array.isArray(s.lfo)) {
             for (let i = 0; i < 3 && i < s.lfo.length; i++) {
                 const src = s.lfo[i];
-                if (typeof src.rate   === 'number') lfo[i].rate   = Math.max(0.05, Math.min(100, src.rate));
-                if (typeof src.amount === 'number') lfo[i].amount = Math.max(0, Math.min(1, src.amount));
-                if (typeof src.shape  === 'number') lfo[i].shape  = Math.max(0, Math.min(5, src.shape|0));
-                if (typeof src.target === 'number') lfo[i].target = Math.max(0, Math.min(7, src.target|0));
+                if (typeof src.rate   === 'number') lfoSettings[i].rate   = Math.max(0.05, Math.min(10.0, src.rate));
+                if (typeof src.amount === 'number') lfoSettings[i].amount = Math.max(0, Math.min(1, src.amount));
+                if (typeof src.shape  === 'number') lfoSettings[i].shape  = Math.max(0, Math.min(4, src.shape|0));
+                if (typeof src.target === 'number') lfoSettings[i].target = Math.max(0, Math.min(7, src.target|0));
             }
         }
         if (typeof s.distEnabled === 'boolean') distEnabled = s.distEnabled;
@@ -138,20 +136,20 @@ function clampI(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
 function clampF(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
 function editLfoProp(dir) {
-    const L = lfo[lfoTab];
-    switch (lfoSel) {
+    const L = lfoSettings[activeLfo];
+    switch (lfoSettingsCursor) {
         case 0: L.shape  = clampI(L.shape + dir, 0, LFO_SHAPES.length - 1); break;
-        case 1: L.rate   = clampF(L.rate * (dir > 0 ? 1.12 : 0.893), 0.05, 100.0); break;
+        case 1: L.rate   = clampF(L.rate * (dir > 0 ? 1.12 : 0.893), 0.05, 10.0); break;
         case 2: L.amount = clampF(Math.round((L.amount + dir * 0.05) * 100) / 100, 0.0, 1.0); break;
         case 3: L.target = clampI(L.target + dir, 0, LFO_TARGETS.length - 1); break;
     }
-    sendLfoParams(lfoTab);
+    sendLfoParams(activeLfo);
     saveState();
     displayDirty = true;
 }
 
 function editDistProp(dir) {
-    switch (distSel) {
+    switch (distCursor) {
         case 0: distType   = clampI(distType + dir, 1, 3); break;
         case 1: distAmount = clampF(Math.round((distAmount + dir * 0.05) * 100) / 100, 0.0, 1.0); break;
         case 2: distMix    = clampF(Math.round((distMix    + dir * 0.05) * 100) / 100, 0.0, 1.0); break;
@@ -164,61 +162,79 @@ function editDistProp(dir) {
 function handleJog(delta) {
     const dir = delta > 0 ? 1 : -1;
 
-    if (state === STATE_KNOB_DISPLAY) return;
+    if (menuState === STATE_KNOB_DISPLAY) return;
 
-    if (state === STATE_MENU_MAIN) {
-        mainSel = (mainSel + dir + 2) % 2;
+    if (menuState === STATE_MAIN) {
+        mainCursor = (mainCursor + dir + 2) % 2;
         displayDirty = true;
         return;
     }
 
-    if (state === STATE_MENU_LFO) {
-        if (shiftHeld) {
-            lfoTab     = (lfoTab + dir + 3) % 3;
-            lfoEditing = false;
-        } else if (lfoEditing) {
+    if (menuState === STATE_LFO_SELECT) {
+        lfoSelectCursor = (lfoSelectCursor + dir + 3) % 3;
+        displayDirty = true;
+        return;
+    }
+
+    if (menuState === STATE_LFO_SETTINGS) {
+        if (editMode) {
             editLfoProp(dir);
         } else {
-            lfoSel = (lfoSel + dir + LFO_PROPS.length) % LFO_PROPS.length;
+            lfoSettingsCursor = (lfoSettingsCursor + dir + LFO_PROPS.length) % LFO_PROPS.length;
+            displayDirty = true;
         }
-        displayDirty = true;
         return;
     }
 
-    if (state === STATE_MENU_DIST) {
-        if (distEditing && distSel < 3) {
+    if (menuState === STATE_DISTORTION) {
+        if (editMode && distCursor < 3) {
             editDistProp(dir);
         } else {
-            distSel = (distSel + dir + 4) % 4;
+            distCursor = (distCursor + dir + 4) % 4;
+            displayDirty = true;
         }
-        displayDirty = true;
         return;
     }
 }
 
 function handleClick() {
-    if (state === STATE_KNOB_DISPLAY) return;
+    if (menuState === STATE_KNOB_DISPLAY) return;
 
-    if (state === STATE_MENU_MAIN) {
-        if      (mainSel === 0) { state = STATE_MENU_LFO;  lfoSel = 0;  lfoEditing = false; }
-        else if (mainSel === 1) { state = STATE_MENU_DIST; distSel = 0; distEditing = false; }
+    if (menuState === STATE_MAIN) {
+        if (mainCursor === 0) {
+            menuState = STATE_LFO_SELECT;
+            lfoSelectCursor = 0;
+        } else {
+            menuState = STATE_DISTORTION;
+            distCursor = 0;
+            editMode = false;
+        }
         displayDirty = true;
         return;
     }
 
-    if (state === STATE_MENU_LFO) {
-        lfoEditing = !lfoEditing;
+    if (menuState === STATE_LFO_SELECT) {
+        activeLfo = lfoSelectCursor;
+        menuState = STATE_LFO_SETTINGS;
+        lfoSettingsCursor = 0;
+        editMode = false;
         displayDirty = true;
         return;
     }
 
-    if (state === STATE_MENU_DIST) {
-        if (distSel === 3) {
+    if (menuState === STATE_LFO_SETTINGS) {
+        editMode = !editMode;
+        displayDirty = true;
+        return;
+    }
+
+    if (menuState === STATE_DISTORTION) {
+        if (distCursor === 3) {
             distEnabled = !distEnabled;
             sendDistParams();
             saveState();
         } else {
-            distEditing = !distEditing;
+            editMode = !editMode;
         }
         displayDirty = true;
         return;
@@ -226,11 +242,22 @@ function handleClick() {
 }
 
 function handleBack() {
-    lfoEditing  = false;
-    distEditing = false;
-    if (state !== STATE_MENU_MAIN && state !== STATE_KNOB_DISPLAY) {
-        state = STATE_MENU_MAIN;
+    if (editMode) {
+        editMode = false;
         displayDirty = true;
+        return;
+    }
+
+    if (menuState === STATE_LFO_SETTINGS) {
+        menuState = STATE_LFO_SELECT;
+        displayDirty = true;
+        return;
+    }
+
+    if (menuState === STATE_LFO_SELECT || menuState === STATE_DISTORTION) {
+        menuState = STATE_MAIN;
+        displayDirty = true;
+        return;
     }
 }
 
@@ -258,70 +285,60 @@ function drawSeparator(y) {
     fill_rect(0, y, 128, 1, 1);
 }
 
-function drawRowCursor(y, editing) {
-    if (editing) {
-        fill_rect(2, y, 5, 7, 1);
-    } else {
-        print(2, y, '>', 1);
-    }
-}
-
-function drawMenuMain() {
+function drawMain() {
     clear_screen();
     drawTitle();
     drawSeparator(16);
     const items = ['LFO', 'DISTORTION'];
     for (let i = 0; i < items.length; i++) {
         const y = 22 + i * 16;
-        if (i === mainSel) print(2, y, '>', 1);
+        if (i === mainCursor) print(2, y, '>', 1);
         print(12, y, items[i], 1);
     }
 }
 
-function formatHz(rate) {
-    if (rate < 1)   return `${rate.toFixed(2)} Hz`;
-    if (rate < 10)  return `${rate.toFixed(1)} Hz`;
-    return `${Math.round(rate)} Hz`;
+function drawLfoSelect() {
+    clear_screen();
+    print(2, 1, 'LFO', 1);
+    drawSeparator(11);
+    for (let i = 0; i < 3; i++) {
+        const y = 14 + i * 14;
+        if (i === lfoSelectCursor) print(2, y, '>', 1);
+        print(12, y, `LFO ${i + 1}`, 1);
+    }
 }
 
-function drawMenuLfo() {
+function drawLfoSettings() {
     clear_screen();
-    for (let t = 0; t < 3; t++) {
-        const label = (t === lfoTab) ? `[LFO${t + 1}]` : ` LFO${t + 1} `;
-        print(2 + t * 42, 1, label, 1);
-    }
+    print(2, 1, `LFO ${activeLfo + 1}`, 1);
     drawSeparator(11);
-
-    const L = lfo[lfoTab];
+    const L = lfoSettings[activeLfo];
     const vals = [
         LFO_SHAPES[L.shape],
-        formatHz(L.rate),
+        `${L.rate.toFixed(2)} Hz`,
         L.amount.toFixed(2),
         LFO_TARGETS[L.target],
     ];
-
     for (let i = 0; i < LFO_PROPS.length; i++) {
         const y = 14 + i * 12;
-        if (i === lfoSel) drawRowCursor(y, lfoEditing);
+        if (i === lfoSettingsCursor) print(2, y, editMode ? '*' : '>', 1);
         print(12, y, `${LFO_PROPS[i]}: ${vals[i]}`, 1);
     }
 }
 
-function drawMenuDist() {
+function drawDistortion() {
     clear_screen();
     print(2, 1, 'DISTORTION', 1);
     drawSeparator(11);
-
     const rows = [
         `TYPE:   ${DIST_TYPE_NAMES[distType - 1]}`,
         `AMOUNT: ${distAmount.toFixed(2)}`,
         `MIX:    ${distMix.toFixed(2)}`,
         distEnabled ? '[ ON  ]' : '[ OFF ]',
     ];
-
     for (let i = 0; i < rows.length; i++) {
         const y = 14 + i * 12;
-        if (i === distSel) drawRowCursor(y, distEditing && i < 3);
+        if (i === distCursor) print(2, y, (editMode && i < 3) ? '*' : '>', 1);
         print(12, y, rows[i], 1);
     }
 }
@@ -345,11 +362,12 @@ function drawKnobDisplay() {
 }
 
 function drawCurrentState() {
-    switch (state) {
-        case STATE_MENU_MAIN:    drawMenuMain();    break;
-        case STATE_MENU_LFO:     drawMenuLfo();     break;
-        case STATE_MENU_DIST:    drawMenuDist();    break;
-        case STATE_KNOB_DISPLAY: drawKnobDisplay(); break;
+    switch (menuState) {
+        case STATE_MAIN:         drawMain();         break;
+        case STATE_LFO_SELECT:   drawLfoSelect();    break;
+        case STATE_LFO_SETTINGS: drawLfoSettings();  break;
+        case STATE_DISTORTION:   drawDistortion();   break;
+        case STATE_KNOB_DISPLAY: drawKnobDisplay();  break;
     }
 }
 
@@ -366,7 +384,7 @@ globalThis.tick = function () {
         knobTicks++;
         if (knobTicks > KNOB_TIMEOUT_TICKS) {
             activeKnob = -1;
-            state = prevState;
+            menuState = prevMenuState;
             displayDirty = true;
         }
     }
@@ -383,11 +401,6 @@ globalThis.onMidiMessageInternal = function (data) {
     const cc  = data[1];
     const val = data[2];
 
-    if (cc === CC_SHIFT) {
-        shiftHeld = (val > 0);
-        return;
-    }
-
     if (cc >= KNOB_CC_BASE && cc < KNOB_CC_BASE + KNOB_COUNT) {
         const delta = decodeDelta(val);
         if (delta !== 0) {
@@ -396,8 +409,8 @@ globalThis.onMidiMessageInternal = function (data) {
             sendKnobParam(idx);
             activeKnob = idx;
             knobTicks  = 0;
-            if (state !== STATE_KNOB_DISPLAY) prevState = state;
-            state = STATE_KNOB_DISPLAY;
+            if (menuState !== STATE_KNOB_DISPLAY) prevMenuState = menuState;
+            menuState = STATE_KNOB_DISPLAY;
             displayDirty = true;
         }
         return;
