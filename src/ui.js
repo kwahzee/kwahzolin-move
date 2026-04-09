@@ -12,11 +12,12 @@ const CC_BACK      = MoveBack;        /* 51 */
 const CC_SHIFT     = MoveShift;       /* 49 */
 
 /* ── Display state machine ──────────────────────────────────────────────── */
-const STATE_MENU_MAIN   = 0;
-const STATE_MENU_LFO    = 1;
-const STATE_MENU_DIST   = 2;
-const STATE_MENU_MODULE = 3;
-const STATE_KNOB_DISPLAY = 4;
+const STATE_MENU_MAIN      = 0;
+const STATE_MENU_LFO       = 1;
+const STATE_MENU_DIST      = 2;
+const STATE_MENU_MODULE    = 3;
+const STATE_KNOB_DISPLAY   = 4;
+const STATE_CONFIRM_UNLOAD = 5;
 
 /* ── LFO config ─────────────────────────────────────────────────────────── */
 const LFO_SHAPES  = ['Triangle', 'Sine', 'Square', 'Sawtooth', 'S&H', 'Wander'];
@@ -30,7 +31,7 @@ const LFO_PROPS = ['SHAPE', 'RATE', 'AMOUNT', 'TARGET'];
 /* ── Distortion config ──────────────────────────────────────────────────── */
 const DIST_TYPE_NAMES = ['Overdrive', 'Distortion', 'Fuzz'];
 
-/* ── Knob config (unchanged from v0.1.9) ───────────────────────────────── */
+/* ── Knob config ────────────────────────────────────────────────────────── */
 const KNOB_KEYS = [
     'osc1_freq', 'osc2_freq', 'osc_chaos', 'filter_cutoff',
     'filter_resonance', 'filter_chaos', 'ring_mod', 'loop'
@@ -41,7 +42,10 @@ const KNOB_NAMES = [
 ];
 const KNOB_DEFAULTS = [49, 58, 0, 78, 0, 0, 0, 0];
 
-/* ── Title bitmap font (letters in KWAHZOLIN only) ──────────────────────── */
+/* ── Persistence ────────────────────────────────────────────────────────── */
+const STATE_FILE = '/data/UserData/schwung/modules/sound_generators/kwahzolin/state.json';
+
+/* ── Title bitmap font ──────────────────────────────────────────────────── */
 const FONT5x7 = {
     K: [17, 18, 20, 24, 20, 18, 17],
     W: [17, 17, 21, 21, 27, 27, 17],
@@ -73,25 +77,26 @@ const lfo = [
 
 /* Distortion state (JS mirror) */
 let distEnabled = false;
-let distType    = 1;   /* 1=Overdrive, 2=Distortion, 3=Fuzz (shown in menu) */
+let distType    = 1;   /* 1=Overdrive, 2=Distortion, 3=Fuzz */
 let distAmount  = 0.0;
 
 /* Navigation state */
 let state        = STATE_MENU_MAIN;
-let prevState    = STATE_MENU_MAIN; /* restored after knob timeout */
+let prevState    = STATE_MENU_MAIN;
 let mainSel      = 0;               /* 0=LFO, 1=DISTORTION, 2=MODULE */
 let lfoTab       = 0;               /* 0-2 active LFO */
-let lfoSel       = 0;               /* 0-3 cursor row in LFO submenu */
+let lfoSel       = 0;               /* 0-3 cursor row */
 let lfoEditing   = false;
-let distSel      = 0;               /* 0-2 cursor row in distortion submenu */
+let distSel      = 0;               /* 0-2 cursor row */
 let distEditing  = false;
-let moduleSel    = 0;               /* 0-1 cursor row in module submenu */
+let moduleSel    = 0;               /* 0-1 cursor row */
+let confirmSel   = 0;               /* 0=YES, 1=NO */
 let activeKnob   = -1;
 let knobTicks    = 0;
 let shiftHeld    = false;
 let displayDirty = true;
 
-const KNOB_TIMEOUT_TICKS = 88; /* ~2 seconds at 44 ticks/sec */
+const KNOB_TIMEOUT_TICKS = 88; /* ~2 seconds at ~44 ticks/sec */
 
 /* ── Parameter sending ──────────────────────────────────────────────────── */
 function knobToParam(v)     { return (v / 127).toFixed(4); }
@@ -107,9 +112,41 @@ function sendLfoParams(i) {
 }
 
 function sendDistParams() {
-    const dspType = distEnabled ? distType : 0;
-    host_module_set_param('dist_type',   String(dspType));
+    host_module_set_param('dist_type',   String(distEnabled ? distType : 0));
     host_module_set_param('dist_amount', distAmount.toFixed(4));
+}
+
+/* ── Persistence: save / restore ────────────────────────────────────────── */
+function saveState() {
+    const s = {
+        lfo: lfo.map(l => ({ rate: l.rate, amount: l.amount, shape: l.shape, target: l.target })),
+        distEnabled,
+        distType,
+        distAmount,
+    };
+    host_write_file(STATE_FILE, JSON.stringify(s));
+}
+
+function restoreState() {
+    try {
+        const raw = host_read_file(STATE_FILE);
+        if (!raw) return;
+        const s = JSON.parse(raw);
+        if (s.lfo && Array.isArray(s.lfo)) {
+            for (let i = 0; i < 3 && i < s.lfo.length; i++) {
+                const src = s.lfo[i];
+                if (typeof src.rate   === 'number') lfo[i].rate   = Math.max(0.05, Math.min(100, src.rate));
+                if (typeof src.amount === 'number') lfo[i].amount = Math.max(0, Math.min(1, src.amount));
+                if (typeof src.shape  === 'number') lfo[i].shape  = Math.max(0, Math.min(5, src.shape|0));
+                if (typeof src.target === 'number') lfo[i].target = Math.max(0, Math.min(7, src.target|0));
+            }
+        }
+        if (typeof s.distEnabled === 'boolean') distEnabled = s.distEnabled;
+        if (typeof s.distType    === 'number')  distType    = Math.max(1, Math.min(3, s.distType|0));
+        if (typeof s.distAmount  === 'number')  distAmount  = Math.max(0, Math.min(1, s.distAmount));
+    } catch (e) {
+        /* Corrupt or missing state file — use defaults */
+    }
 }
 
 /* ── Value editing helpers ───────────────────────────────────────────────── */
@@ -119,34 +156,23 @@ function clampF(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
 function editLfoProp(dir) {
     const L = lfo[lfoTab];
     switch (lfoSel) {
-        case 0: /* SHAPE */
-            L.shape = clampI(L.shape + dir, 0, LFO_SHAPES.length - 1);
-            break;
-        case 1: /* RATE — log-scale steps */
-            L.rate = clampF(L.rate * (dir > 0 ? 1.12 : 0.893), 0.05, 100.0);
-            break;
-        case 2: /* AMOUNT */
-            L.amount = clampF(Math.round((L.amount + dir * 0.05) * 100) / 100, 0.0, 1.0);
-            break;
-        case 3: /* TARGET */
-            L.target = clampI(L.target + dir, 0, LFO_TARGETS.length - 1);
-            break;
+        case 0: L.shape  = clampI(L.shape + dir, 0, LFO_SHAPES.length - 1); break;
+        case 1: L.rate   = clampF(L.rate * (dir > 0 ? 1.12 : 0.893), 0.05, 100.0); break;
+        case 2: L.amount = clampF(Math.round((L.amount + dir * 0.05) * 100) / 100, 0.0, 1.0); break;
+        case 3: L.target = clampI(L.target + dir, 0, LFO_TARGETS.length - 1); break;
     }
     sendLfoParams(lfoTab);
+    saveState();
     displayDirty = true;
 }
 
 function editDistProp(dir) {
     switch (distSel) {
-        case 0: /* TYPE */
-            distType = clampI(distType + dir, 1, 3);
-            break;
-        case 1: /* AMOUNT */
-            distAmount = clampF(Math.round((distAmount + dir * 0.05) * 100) / 100, 0.0, 1.0);
-            break;
-        /* row 2 is toggle — handled in handleClick, not here */
+        case 0: distType   = clampI(distType + dir, 1, 3); break;
+        case 1: distAmount = clampF(Math.round((distAmount + dir * 0.05) * 100) / 100, 0.0, 1.0); break;
     }
     sendDistParams();
+    saveState();
     displayDirty = true;
 }
 
@@ -157,23 +183,21 @@ function handleJog(delta) {
     if (state === STATE_KNOB_DISPLAY) return;
 
     if (state === STATE_MENU_MAIN) {
-        mainSel = clampI(mainSel + dir, 0, 2);
+        mainSel = (mainSel + dir + 3) % 3;
         displayDirty = true;
         return;
     }
 
     if (state === STATE_MENU_LFO) {
         if (shiftHeld) {
-            /* Shift+jog: cycle through LFO tabs 1→2→3→1 */
-            lfoTab = (lfoTab + dir + 3) % 3;
+            lfoTab     = (lfoTab + dir + 3) % 3;
             lfoEditing = false;
-            displayDirty = true;
         } else if (lfoEditing) {
             editLfoProp(dir);
         } else {
-            lfoSel = clampI(lfoSel + dir, 0, LFO_PROPS.length - 1);
-            displayDirty = true;
+            lfoSel = (lfoSel + dir + LFO_PROPS.length) % LFO_PROPS.length;
         }
+        displayDirty = true;
         return;
     }
 
@@ -181,14 +205,20 @@ function handleJog(delta) {
         if (distEditing && distSel < 2) {
             editDistProp(dir);
         } else {
-            distSel = clampI(distSel + dir, 0, 2);
-            displayDirty = true;
+            distSel = (distSel + dir + 3) % 3;
         }
+        displayDirty = true;
         return;
     }
 
     if (state === STATE_MENU_MODULE) {
-        moduleSel = clampI(moduleSel + dir, 0, 1);
+        moduleSel = (moduleSel + dir + 2) % 2;
+        displayDirty = true;
+        return;
+    }
+
+    if (state === STATE_CONFIRM_UNLOAD) {
+        confirmSel = (confirmSel + dir + 2) % 2;
         displayDirty = true;
     }
 }
@@ -197,7 +227,7 @@ function handleClick() {
     if (state === STATE_KNOB_DISPLAY) return;
 
     if (state === STATE_MENU_MAIN) {
-        if (mainSel === 0)      { state = STATE_MENU_LFO;    lfoSel = 0;   lfoEditing = false; }
+        if      (mainSel === 0) { state = STATE_MENU_LFO;    lfoSel = 0;   lfoEditing = false; }
         else if (mainSel === 1) { state = STATE_MENU_DIST;   distSel = 0;  distEditing = false; }
         else if (mainSel === 2) { state = STATE_MENU_MODULE; moduleSel = 0; }
         displayDirty = true;
@@ -212,9 +242,9 @@ function handleClick() {
 
     if (state === STATE_MENU_DIST) {
         if (distSel === 2) {
-            /* ON/OFF toggle */
             distEnabled = !distEnabled;
             sendDistParams();
+            saveState();
         } else {
             distEditing = !distEditing;
         }
@@ -224,9 +254,23 @@ function handleClick() {
 
     if (state === STATE_MENU_MODULE) {
         if (moduleSel === 0) {
+            /* SWAP — return to module picker (host unloads DSP and reloads menu) */
             host_return_to_menu();
         } else {
-            host_unload_module();
+            /* UNLOAD — ask for confirmation first */
+            confirmSel = 1;   /* default to NO */
+            state      = STATE_CONFIRM_UNLOAD;
+            displayDirty = true;
+        }
+        return;
+    }
+
+    if (state === STATE_CONFIRM_UNLOAD) {
+        if (confirmSel === 0) {
+            host_return_to_menu();  /* YES — unload and go to menu */
+        } else {
+            state = STATE_MENU_MODULE;  /* NO — back to module submenu */
+            displayDirty = true;
         }
     }
 }
@@ -234,7 +278,10 @@ function handleClick() {
 function handleBack() {
     lfoEditing   = false;
     distEditing  = false;
-    if (state !== STATE_MENU_MAIN && state !== STATE_KNOB_DISPLAY) {
+    if (state === STATE_CONFIRM_UNLOAD) {
+        state = STATE_MENU_MODULE;
+        displayDirty = true;
+    } else if (state !== STATE_MENU_MAIN && state !== STATE_KNOB_DISPLAY) {
         state = STATE_MENU_MAIN;
         displayDirty = true;
     }
@@ -261,24 +308,25 @@ function drawTitle() {
     }
 }
 
-/* Draw cursor '>' at (2, y) or a filled block in edit mode */
-function drawCursor(y, editing) {
+function drawSeparator(y) {
+    fill_rect(0, y, 128, 1, 1);
+}
+
+/* Draw cursor for a list row.
+ * Only call this for the currently selected row.
+ * editing=true → filled block (you are changing the value)
+ * editing=false → '>' arrow (you are choosing which row) */
+function drawRowCursor(y, editing) {
     if (editing) {
-        fill_rect(2, y, 6, 7, 1);  /* filled block = edit mode */
+        fill_rect(2, y, 5, 7, 1);
     } else {
         print(2, y, '>', 1);
     }
 }
 
-function drawSeparator(y) {
-    fill_rect(0, y, 128, 1, 1);
-}
-
 /* ── State screens ──────────────────────────────────────────────────────── */
 function drawMenuMain() {
     clear_screen();
-    /* Title uses custom bitmap font */
-    const titleY = Math.floor((14 - CHAR_H) / 2);
     drawTitle();
     drawSeparator(16);
     const items = ['LFO', 'DISTORTION', 'MODULE'];
@@ -297,12 +345,10 @@ function formatHz(rate) {
 
 function drawMenuLfo() {
     clear_screen();
-
-    /* Tab header — active tab shown with brackets */
+    /* Tab header */
     for (let t = 0; t < 3; t++) {
-        const x = 2 + t * 42;
         const label = (t === lfoTab) ? `[LFO${t + 1}]` : ` LFO${t + 1} `;
-        print(x, 1, label, 1);
+        print(2 + t * 42, 1, label, 1);
     }
     drawSeparator(11);
 
@@ -316,8 +362,7 @@ function drawMenuLfo() {
 
     for (let i = 0; i < LFO_PROPS.length; i++) {
         const y = 14 + i * 12;
-        drawCursor(y, lfoEditing && i === lfoSel);
-        if (!lfoEditing && i === lfoSel) print(2, y, '>', 1);
+        if (i === lfoSel) drawRowCursor(y, lfoEditing);
         print(12, y, `${LFO_PROPS[i]}: ${vals[i]}`, 1);
     }
 }
@@ -327,17 +372,15 @@ function drawMenuDist() {
     print(2, 1, 'DISTORTION', 1);
     drawSeparator(11);
 
-    const typeName = DIST_TYPE_NAMES[distType - 1];
     const rows = [
-        `TYPE:   ${typeName}`,
+        `TYPE:   ${DIST_TYPE_NAMES[distType - 1]}`,
         `AMOUNT: ${distAmount.toFixed(2)}`,
         distEnabled ? '[ ON  ]' : '[ OFF ]',
     ];
 
     for (let i = 0; i < rows.length; i++) {
         const y = 14 + i * 13;
-        drawCursor(y, distEditing && i === distSel && i < 2);
-        if (!distEditing && i === distSel) print(2, y, '>', 1);
+        if (i === distSel) drawRowCursor(y, distEditing && i < 2);
         print(12, y, rows[i], 1);
     }
 }
@@ -354,6 +397,18 @@ function drawMenuModule() {
     }
 }
 
+function drawConfirmUnload() {
+    clear_screen();
+    print(2, 1, 'UNLOAD KWAHZOLIN?', 1);
+    drawSeparator(11);
+    const opts = ['YES', 'NO'];
+    for (let i = 0; i < opts.length; i++) {
+        const y = 16 + i * 14;
+        if (i === confirmSel) print(2, y, '>', 1);
+        print(12, y, opts[i], 1);
+    }
+}
+
 function drawKnobDisplay() {
     clear_screen();
     if (activeKnob < 0) return;
@@ -361,12 +416,10 @@ function drawKnobDisplay() {
     const tw = text_width(name);
     print(Math.floor((128 - tw) / 2), 16, name, 1);
 
-    /* Percentage value */
-    const pct  = knobValuePct(activeKnob);
-    const ptw  = text_width(pct);
+    const pct = knobValuePct(activeKnob);
+    const ptw = text_width(pct);
     print(Math.floor((128 - ptw) / 2), 32, pct, 1);
 
-    /* Bar */
     const barW = 100;
     const barX = Math.floor((128 - barW) / 2);
     const fill = Math.round(knobValues[activeKnob] / 127 * barW);
@@ -376,22 +429,27 @@ function drawKnobDisplay() {
 
 function drawCurrentState() {
     switch (state) {
-        case STATE_MENU_MAIN:    drawMenuMain();    break;
-        case STATE_MENU_LFO:     drawMenuLfo();     break;
-        case STATE_MENU_DIST:    drawMenuDist();    break;
-        case STATE_MENU_MODULE:  drawMenuModule();  break;
-        case STATE_KNOB_DISPLAY: drawKnobDisplay(); break;
+        case STATE_MENU_MAIN:      drawMenuMain();      break;
+        case STATE_MENU_LFO:       drawMenuLfo();       break;
+        case STATE_MENU_DIST:      drawMenuDist();      break;
+        case STATE_MENU_MODULE:    drawMenuModule();    break;
+        case STATE_KNOB_DISPLAY:   drawKnobDisplay();   break;
+        case STATE_CONFIRM_UNLOAD: drawConfirmUnload(); break;
     }
 }
 
 /* ── Module lifecycle ────────────────────────────────────────────────────── */
 globalThis.init = function () {
+    /* Restore persisted LFO/distortion settings before sending to DSP */
+    restoreState();
+
     /* Send all knob defaults to DSP */
     for (let i = 0; i < KNOB_COUNT; i++) sendKnobParam(i);
-    /* Send all LFO defaults to DSP */
+    /* Send restored (or default) LFO params to DSP */
     for (let i = 0; i < 3; i++) sendLfoParams(i);
-    /* Send distortion defaults */
+    /* Send restored (or default) distortion params */
     sendDistParams();
+
     displayDirty = true;
 };
 
@@ -417,13 +475,12 @@ globalThis.onMidiMessageInternal = function (data) {
     const cc  = data[1];
     const val = data[2];
 
-    /* Shift key */
     if (cc === CC_SHIFT) {
         shiftHeld = (val > 0);
         return;
     }
 
-    /* Knobs 1-8 — delta-encoded, always active */
+    /* Knobs 1-8 */
     if (cc >= KNOB_CC_BASE && cc < KNOB_CC_BASE + KNOB_COUNT) {
         const delta = decodeDelta(val);
         if (delta !== 0) {
@@ -439,16 +496,15 @@ globalThis.onMidiMessageInternal = function (data) {
         return;
     }
 
-    /* Jog wheel — delta-encoded */
+    /* Jog wheel */
     if (cc === CC_JOG_WHEEL) {
         const delta = decodeDelta(val);
         if (delta !== 0) handleJog(delta);
         return;
     }
 
-    /* Button-type inputs: ignore releases */
     if (val === 0) return;
 
-    if (cc === CC_BACK)      handleBack();
+    if      (cc === CC_BACK)      handleBack();
     else if (cc === CC_JOG_CLICK) handleClick();
 };

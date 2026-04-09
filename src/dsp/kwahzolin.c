@@ -477,7 +477,11 @@ static void kwahzolin_render_block(void *inst, int16_t *out_lr, int frames) {
         float pulse2  = (osc2 > 0.0f) ? 1.0f : -1.0f;
         float xor_out = (pulse1 != pulse2) ? 1.0f : -1.0f;
 
-        float ring      = osc1 * osc2;
+        /* osc1*osc2 (triangles) has RMS ~0.33 vs XOR square RMS 1.0.
+         * Scale by 3 so it hits the drive stage at comparable loudness,
+         * giving the clangorous metallic character ring mod is known for.
+         * tanhf clamps naturally — no clipping artifacts. */
+        float ring      = osc1 * osc2 * 3.0f;
         float sig       = xor_out * (1.0f - eff_ring_mod) + ring * eff_ring_mod;
         float input_sig = sig;
         if (k->inject_flag) {
