@@ -3,49 +3,40 @@ import { MoveKnob1, MoveShift, MoveBack, MoveMainKnob, MoveMainButton }
 import { decodeDelta, isCapacitiveTouchMessage }
     from '/data/UserData/schwung/shared/input_filter.mjs';
 
-/* ── Hardware CC constants ──────────────────────────────────────────────── */
-const KNOB_CC_BASE = MoveKnob1;   /* 71 */
+const KNOB_CC_BASE = MoveKnob1;
 const KNOB_COUNT   = 8;
-const CC_JOG_WHEEL = MoveMainKnob;    /* 14 */
-const CC_JOG_CLICK = MoveMainButton;  /* 3  */
-const CC_BACK      = MoveBack;        /* 51 */
-const CC_SHIFT     = MoveShift;       /* 49 */
+const CC_JOG_WHEEL = MoveMainKnob;
+const CC_JOG_CLICK = MoveMainButton;
+const CC_BACK      = MoveBack;
+const CC_SHIFT     = MoveShift;
 
-/* ── Display state machine ──────────────────────────────────────────────── */
-const STATE_MENU_MAIN      = 0;
-const STATE_MENU_LFO       = 1;
-const STATE_MENU_DIST      = 2;
-const STATE_MENU_MODULE    = 3;
-const STATE_KNOB_DISPLAY   = 4;
-const STATE_CONFIRM_UNLOAD = 5;
+const STATE_MENU_MAIN    = 0;
+const STATE_MENU_LFO     = 1;
+const STATE_MENU_DIST    = 2;
+const STATE_KNOB_DISPLAY = 3;
 
-/* ── LFO config ─────────────────────────────────────────────────────────── */
 const LFO_SHAPES  = ['Triangle', 'Sine', 'Square', 'Sawtooth', 'S&H', 'Wander'];
 const LFO_TARGETS = [
     'Osc 1 Freq', 'Osc 2 Freq', 'Osc Chaos',
     'Filter Cutoff', 'Filter Res', 'Filter Chaos',
-    'Ring Mod', 'Loop'
+    'Cross Mod', 'Loop'
 ];
 const LFO_PROPS = ['SHAPE', 'RATE', 'AMOUNT', 'TARGET'];
 
-/* ── Distortion config ──────────────────────────────────────────────────── */
 const DIST_TYPE_NAMES = ['Overdrive', 'Distortion', 'Fuzz'];
 
-/* ── Knob config ────────────────────────────────────────────────────────── */
 const KNOB_KEYS = [
     'osc1_freq', 'osc2_freq', 'osc_chaos', 'filter_cutoff',
-    'filter_resonance', 'filter_chaos', 'ring_mod', 'loop'
+    'filter_resonance', 'filter_chaos', 'cross_mod', 'loop'
 ];
 const KNOB_NAMES = [
     'Osc 1 Frequency', 'Osc 2 Frequency', 'Osc Chaos',    'Filter Cutoff',
-    'Filter Resonance', 'Filter Chaos',   'Ring Modulation', 'Loop'
+    'Filter Resonance', 'Filter Chaos',   'Cross Mod', 'Loop'
 ];
 const KNOB_DEFAULTS = [49, 58, 0, 78, 0, 0, 0, 0];
 
-/* ── Persistence ────────────────────────────────────────────────────────── */
 const STATE_FILE = '/data/UserData/schwung/modules/sound_generators/kwahzolin/state.json';
 
-/* ── Title bitmap font ──────────────────────────────────────────────────── */
 const FONT5x7 = {
     K: [17, 18, 20, 24, 20, 18, 17],
     W: [17, 17, 21, 21, 27, 27, 17],
@@ -65,40 +56,34 @@ const CHAR_GAP   = 2;
 const TITLE_W    = TITLE_STR.length * CHAR_W + (TITLE_STR.length - 1) * CHAR_GAP;
 const TITLE_X    = Math.floor((128 - TITLE_W) / 2);
 
-/* ── State ──────────────────────────────────────────────────────────────── */
 const knobValues = [...KNOB_DEFAULTS];
 
-/* LFO state (JS mirror — sent to DSP via set_param on change) */
 const lfo = [
     { rate: 0.5, amount: 0.0, shape: 0, target: 3 },
     { rate: 0.5, amount: 0.0, shape: 0, target: 3 },
     { rate: 0.5, amount: 0.0, shape: 0, target: 3 },
 ];
 
-/* Distortion state (JS mirror) */
 let distEnabled = false;
-let distType    = 1;   /* 1=Overdrive, 2=Distortion, 3=Fuzz */
+let distType    = 1;
 let distAmount  = 0.0;
+let distMix     = 1.0;
 
-/* Navigation state */
 let state        = STATE_MENU_MAIN;
 let prevState    = STATE_MENU_MAIN;
-let mainSel      = 0;               /* 0=LFO, 1=DISTORTION, 2=MODULE */
-let lfoTab       = 0;               /* 0-2 active LFO */
-let lfoSel       = 0;               /* 0-3 cursor row */
+let mainSel      = 0;
+let lfoTab       = 0;
+let lfoSel       = 0;
 let lfoEditing   = false;
-let distSel      = 0;               /* 0-2 cursor row */
+let distSel      = 0;
 let distEditing  = false;
-let moduleSel    = 0;               /* 0-1 cursor row */
-let confirmSel   = 0;               /* 0=YES, 1=NO */
 let activeKnob   = -1;
 let knobTicks    = 0;
 let shiftHeld    = false;
 let displayDirty = true;
 
-const KNOB_TIMEOUT_TICKS = 88; /* ~2 seconds at ~44 ticks/sec */
+const KNOB_TIMEOUT_TICKS = 44;
 
-/* ── Parameter sending ──────────────────────────────────────────────────── */
 function knobToParam(v)     { return (v / 127).toFixed(4); }
 function sendKnobParam(idx) { host_module_set_param(KNOB_KEYS[idx], knobToParam(knobValues[idx])); }
 function knobValuePct(i)    { return `${Math.round(knobValues[i] / 1.27)}%`; }
@@ -114,15 +99,16 @@ function sendLfoParams(i) {
 function sendDistParams() {
     host_module_set_param('dist_type',   String(distEnabled ? distType : 0));
     host_module_set_param('dist_amount', distAmount.toFixed(4));
+    host_module_set_param('dist_mix',    distMix.toFixed(4));
 }
 
-/* ── Persistence: save / restore ────────────────────────────────────────── */
 function saveState() {
     const s = {
         lfo: lfo.map(l => ({ rate: l.rate, amount: l.amount, shape: l.shape, target: l.target })),
         distEnabled,
         distType,
         distAmount,
+        distMix,
     };
     host_write_file(STATE_FILE, JSON.stringify(s));
 }
@@ -144,12 +130,10 @@ function restoreState() {
         if (typeof s.distEnabled === 'boolean') distEnabled = s.distEnabled;
         if (typeof s.distType    === 'number')  distType    = Math.max(1, Math.min(3, s.distType|0));
         if (typeof s.distAmount  === 'number')  distAmount  = Math.max(0, Math.min(1, s.distAmount));
-    } catch (e) {
-        /* Corrupt or missing state file — use defaults */
-    }
+        if (typeof s.distMix     === 'number')  distMix     = Math.max(0, Math.min(1, s.distMix));
+    } catch (e) {}
 }
 
-/* ── Value editing helpers ───────────────────────────────────────────────── */
 function clampI(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
 function clampF(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
@@ -170,20 +154,20 @@ function editDistProp(dir) {
     switch (distSel) {
         case 0: distType   = clampI(distType + dir, 1, 3); break;
         case 1: distAmount = clampF(Math.round((distAmount + dir * 0.05) * 100) / 100, 0.0, 1.0); break;
+        case 2: distMix    = clampF(Math.round((distMix    + dir * 0.05) * 100) / 100, 0.0, 1.0); break;
     }
     sendDistParams();
     saveState();
     displayDirty = true;
 }
 
-/* ── Input handling ─────────────────────────────────────────────────────── */
 function handleJog(delta) {
     const dir = delta > 0 ? 1 : -1;
 
     if (state === STATE_KNOB_DISPLAY) return;
 
     if (state === STATE_MENU_MAIN) {
-        mainSel = (mainSel + dir + 3) % 3;
+        mainSel = (mainSel + dir + 2) % 2;
         displayDirty = true;
         return;
     }
@@ -202,24 +186,13 @@ function handleJog(delta) {
     }
 
     if (state === STATE_MENU_DIST) {
-        if (distEditing && distSel < 2) {
+        if (distEditing && distSel < 3) {
             editDistProp(dir);
         } else {
-            distSel = (distSel + dir + 3) % 3;
+            distSel = (distSel + dir + 4) % 4;
         }
         displayDirty = true;
         return;
-    }
-
-    if (state === STATE_MENU_MODULE) {
-        moduleSel = (moduleSel + dir + 2) % 2;
-        displayDirty = true;
-        return;
-    }
-
-    if (state === STATE_CONFIRM_UNLOAD) {
-        confirmSel = (confirmSel + dir + 2) % 2;
-        displayDirty = true;
     }
 }
 
@@ -227,9 +200,8 @@ function handleClick() {
     if (state === STATE_KNOB_DISPLAY) return;
 
     if (state === STATE_MENU_MAIN) {
-        if      (mainSel === 0) { state = STATE_MENU_LFO;    lfoSel = 0;   lfoEditing = false; }
-        else if (mainSel === 1) { state = STATE_MENU_DIST;   distSel = 0;  distEditing = false; }
-        else if (mainSel === 2) { state = STATE_MENU_MODULE; moduleSel = 0; }
+        if      (mainSel === 0) { state = STATE_MENU_LFO;  lfoSel = 0;  lfoEditing = false; }
+        else if (mainSel === 1) { state = STATE_MENU_DIST; distSel = 0; distEditing = false; }
         displayDirty = true;
         return;
     }
@@ -241,7 +213,7 @@ function handleClick() {
     }
 
     if (state === STATE_MENU_DIST) {
-        if (distSel === 2) {
+        if (distSel === 3) {
             distEnabled = !distEnabled;
             sendDistParams();
             saveState();
@@ -251,43 +223,17 @@ function handleClick() {
         displayDirty = true;
         return;
     }
-
-    if (state === STATE_MENU_MODULE) {
-        if (moduleSel === 0) {
-            /* SWAP — return to module picker (host unloads DSP and reloads menu) */
-            host_return_to_menu();
-        } else {
-            /* UNLOAD — ask for confirmation first */
-            confirmSel = 1;   /* default to NO */
-            state      = STATE_CONFIRM_UNLOAD;
-            displayDirty = true;
-        }
-        return;
-    }
-
-    if (state === STATE_CONFIRM_UNLOAD) {
-        if (confirmSel === 0) {
-            host_return_to_menu();  /* YES — unload and go to menu */
-        } else {
-            state = STATE_MENU_MODULE;  /* NO — back to module submenu */
-            displayDirty = true;
-        }
-    }
 }
 
 function handleBack() {
-    lfoEditing   = false;
-    distEditing  = false;
-    if (state === STATE_CONFIRM_UNLOAD) {
-        state = STATE_MENU_MODULE;
-        displayDirty = true;
-    } else if (state !== STATE_MENU_MAIN && state !== STATE_KNOB_DISPLAY) {
+    lfoEditing  = false;
+    distEditing = false;
+    if (state !== STATE_MENU_MAIN && state !== STATE_KNOB_DISPLAY) {
         state = STATE_MENU_MAIN;
         displayDirty = true;
     }
 }
 
-/* ── Drawing ─────────────────────────────────────────────────────────────── */
 function drawChar(x, y, ch) {
     const rows = FONT5x7[ch];
     if (!rows) return;
@@ -312,10 +258,6 @@ function drawSeparator(y) {
     fill_rect(0, y, 128, 1, 1);
 }
 
-/* Draw cursor for a list row.
- * Only call this for the currently selected row.
- * editing=true → filled block (you are changing the value)
- * editing=false → '>' arrow (you are choosing which row) */
 function drawRowCursor(y, editing) {
     if (editing) {
         fill_rect(2, y, 5, 7, 1);
@@ -324,14 +266,13 @@ function drawRowCursor(y, editing) {
     }
 }
 
-/* ── State screens ──────────────────────────────────────────────────────── */
 function drawMenuMain() {
     clear_screen();
     drawTitle();
     drawSeparator(16);
-    const items = ['LFO', 'DISTORTION', 'MODULE'];
+    const items = ['LFO', 'DISTORTION'];
     for (let i = 0; i < items.length; i++) {
-        const y = 19 + i * 14;
+        const y = 22 + i * 16;
         if (i === mainSel) print(2, y, '>', 1);
         print(12, y, items[i], 1);
     }
@@ -345,7 +286,6 @@ function formatHz(rate) {
 
 function drawMenuLfo() {
     clear_screen();
-    /* Tab header */
     for (let t = 0; t < 3; t++) {
         const label = (t === lfoTab) ? `[LFO${t + 1}]` : ` LFO${t + 1} `;
         print(2 + t * 42, 1, label, 1);
@@ -375,37 +315,14 @@ function drawMenuDist() {
     const rows = [
         `TYPE:   ${DIST_TYPE_NAMES[distType - 1]}`,
         `AMOUNT: ${distAmount.toFixed(2)}`,
+        `MIX:    ${distMix.toFixed(2)}`,
         distEnabled ? '[ ON  ]' : '[ OFF ]',
     ];
 
     for (let i = 0; i < rows.length; i++) {
-        const y = 14 + i * 13;
-        if (i === distSel) drawRowCursor(y, distEditing && i < 2);
+        const y = 14 + i * 12;
+        if (i === distSel) drawRowCursor(y, distEditing && i < 3);
         print(12, y, rows[i], 1);
-    }
-}
-
-function drawMenuModule() {
-    clear_screen();
-    print(2, 1, 'MODULE', 1);
-    drawSeparator(11);
-    const items = ['SWAP MODULE', 'UNLOAD MODULE'];
-    for (let i = 0; i < items.length; i++) {
-        const y = 14 + i * 14;
-        if (i === moduleSel) print(2, y, '>', 1);
-        print(12, y, items[i], 1);
-    }
-}
-
-function drawConfirmUnload() {
-    clear_screen();
-    print(2, 1, 'UNLOAD KWAHZOLIN?', 1);
-    drawSeparator(11);
-    const opts = ['YES', 'NO'];
-    for (let i = 0; i < opts.length; i++) {
-        const y = 16 + i * 14;
-        if (i === confirmSel) print(2, y, '>', 1);
-        print(12, y, opts[i], 1);
     }
 }
 
@@ -429,27 +346,18 @@ function drawKnobDisplay() {
 
 function drawCurrentState() {
     switch (state) {
-        case STATE_MENU_MAIN:      drawMenuMain();      break;
-        case STATE_MENU_LFO:       drawMenuLfo();       break;
-        case STATE_MENU_DIST:      drawMenuDist();      break;
-        case STATE_MENU_MODULE:    drawMenuModule();    break;
-        case STATE_KNOB_DISPLAY:   drawKnobDisplay();   break;
-        case STATE_CONFIRM_UNLOAD: drawConfirmUnload(); break;
+        case STATE_MENU_MAIN:    drawMenuMain();    break;
+        case STATE_MENU_LFO:     drawMenuLfo();     break;
+        case STATE_MENU_DIST:    drawMenuDist();    break;
+        case STATE_KNOB_DISPLAY: drawKnobDisplay(); break;
     }
 }
 
-/* ── Module lifecycle ────────────────────────────────────────────────────── */
 globalThis.init = function () {
-    /* Restore persisted LFO/distortion settings before sending to DSP */
     restoreState();
-
-    /* Send all knob defaults to DSP */
     for (let i = 0; i < KNOB_COUNT; i++) sendKnobParam(i);
-    /* Send restored (or default) LFO params to DSP */
     for (let i = 0; i < 3; i++) sendLfoParams(i);
-    /* Send restored (or default) distortion params */
     sendDistParams();
-
     displayDirty = true;
 };
 
@@ -480,7 +388,6 @@ globalThis.onMidiMessageInternal = function (data) {
         return;
     }
 
-    /* Knobs 1-8 */
     if (cc >= KNOB_CC_BASE && cc < KNOB_CC_BASE + KNOB_COUNT) {
         const delta = decodeDelta(val);
         if (delta !== 0) {
@@ -496,7 +403,6 @@ globalThis.onMidiMessageInternal = function (data) {
         return;
     }
 
-    /* Jog wheel */
     if (cc === CC_JOG_WHEEL) {
         const delta = decodeDelta(val);
         if (delta !== 0) handleJog(delta);
