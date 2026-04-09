@@ -89,4 +89,4 @@ the module goes to `/data/UserData/schwung/modules/sound_generators/kwahzolin/` 
 
 ---
 
-v0.1.6
+v0.1.7

@@ -202,8 +202,6 @@ static void kwahzolin_render_block(void *inst, int16_t *out_lr, int frames) {
     k->p_loop             += (k->t_loop             - k->p_loop)             * sc;
 
     const float damping = 2.0f * (1.0f - k->p_filter_resonance * 0.995f);
-    const float bp_mix  = 0.3f + k->p_filter_resonance * 0.5f;
-    const float lp_mix  = 1.0f - bp_mix;
 
     for (int i = 0; i < frames; i++) {
 
@@ -259,7 +257,7 @@ static void kwahzolin_render_block(void *inst, int16_t *out_lr, int frames) {
         float pulse2  = (osc2 > 0.0f) ? 1.0f : -1.0f;
         float xor_out = (pulse1 != pulse2) ? 1.0f : -1.0f;
 
-        float mod_chaos     = (k->chaos_held_cv - 0.5f) * 2.0f * k->p_filter_chaos * 3000.0f;
+        float mod_chaos     = (k->chaos_held_cv - 0.5f) * 2.0f * k->p_filter_chaos * 6000.0f;
         float mod_lfo       = lfo_out * k->p_filter_lfo * 2000.0f;
         float raw_cutoff    = k->p_filter_cutoff + mod_chaos + mod_lfo;
         float cutoff_target = (k->p_filter_cutoff <= 20.5f)
@@ -284,7 +282,7 @@ static void kwahzolin_render_block(void *inst, int16_t *out_lr, int frames) {
         k->svf_bp = new_bp;
         k->svf_lp = new_lp;
 
-        float mixed    = (k->svf_lp * lp_mix) + (k->svf_bp * bp_mix);
+        float mixed    = (k->svf_lp * 0.5f) + (k->svf_bp * 0.5f);
         float filtered = tanhf(mixed * 0.6f);
 
         int16_t sample = (int16_t)clampf(filtered * 28000.0f, -32767.0f, 32767.0f);
