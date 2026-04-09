@@ -5,27 +5,28 @@ a benjolin-inspired synthesizer module for the ableton move unofficial firmware 
 ---
 
 ```
-    osc2 ──▶ [clock] ──▶ [ 8 bit shift register ]
-                              │
-                         shift_reg / 255
-                              │
-                         rungler cv ──▶ osc1 freq
-                                   ├──▶ osc2 freq
-                                   └──▶ filter cutoff
+    osc2 ──▶ [clock] ──▶ [ 8-bit shift register ]
+                                    │
+                               shift_reg / 255
+                                    │
+                              rungler cv ──▶ osc1 freq mod
+                                        ├──▶ osc2 freq mod
+                                        └──▶ filter cutoff mod
 
-    osc2 clocks the shift register on every
-    positive zero crossing. osc1's sign becomes
-    the new bit. the register members then fergets.
+    osc2 clocks the register on every positive zero crossing.
+    osc1's sign becomes the new bit.
+    the accumulated register value spills back as voltage.
+    this is a rungler. rob hordijk's circuit.
 ```
 
-2 osc, triangle-shaped, circling each other. osc2 is the clock — it ticks the rungler on every upswing, pushing a new bit into the shift register from osc1's sign. the accumulated register value spills back as voltage into both oscillators' frequencies and into the filter's mouth. this is a rungler, rob hordijk's circuit.
+2 oscillators, triangle-shaped, circling each other. osc2 is the clock. every upswing pushes a new bit into the 8-bit shift register from osc1's sign. the register value feeds back into both oscillator frequencies and into the filter's cutoff.
 
 ---
 
 ```
-    [osc1] ──▶ pulse ──▶ XOR ──▶ [filter] ──▶ out
-    [osc2] ──▶ pulse ──┘               ▲
-                                  rungler cv
+    [osc1] ──▶ pulse ──▶ XOR ──▶ ring mix ──▶ [svf filter] ──▶ [distortion] ──▶ out
+    [osc2] ──▶ pulse ──┘    └──▶ osc1×osc2         ▲
+                                               rungler cv + lfo
 ```
 
 ---
@@ -37,56 +38,82 @@ a benjolin-inspired synthesizer module for the ableton move unofficial firmware 
     │  1  │ │  2  │ │  3  │ │  4  │ │  5  │ │  6  │ │  7  │ │  8  │
     └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘
        │       │       │       │       │       │       │       │
-      osc1    osc2    osc    filter  filter  filter  filter  loop
-      freq    freq   chaos   cutoff  reson    lfo    chaos
+      osc1    osc2    osc    filter  filter  filter   ring    loop
+      freq    freq   chaos   cutoff  reson   chaos    mod
 ```
 
-**osc 1 frequency** — the base pitch of the first triangle.
+**osc 1 frequency** — base pitch of the first triangle oscillator. the rungler and lfo can sweep it.
 
-**osc 2 frequency** — the clock rate of the kwahzolin. slow osc2 means the rungler evolves languidly. fast osc2 and everything seizes up.
+**osc 2 frequency** — clock rate of the kwahzolin. slow osc2 means the rungler evolves languidly. fast osc2 and everything seizes up.
 
-**osc chaos** — how deep the rungler digs into both oscillators' frequencies. at zero, both run clean at their set rates. at maximum, both smear across an octave or more.
+**osc chaos** — how deep the rungler effects both oscillator frequencies.
 
-**filter cutoff** — the resting mouth of the filter. the rungler and lfo drag it round.
+**filter cutoff** — resting mouth of the state variable filter. the rungler and lfo drag it around.
 
-**filter resonance** — the amount of self-feedback. at high values the filter pings from every rungler step. at maximum it self-oscillates as a sine at the cutoff frequency.
+**filter resonance** — filter self-feedback amount.
 
-**filter lfo** — how much the slow internal lfo sweeps the cutoff. at zero the lfo has no effect. at maximum it swings up to 2000hz above the base cutoff in a 20-second triangle cycle.
+**filter chaos** — scales how far the rungler throws the cutoff on each clock tick.
 
-**filter chaos** — the rungler latches a new value on each osc 2 clock tick and holds it until the next.
+**ring modulation** — crossfades between the xor pulse signal and true ring mod (osc1 × osc2).
 
-**loop** — turing machine style register control.
+**loop** — turing machine register control. at zero: random. at one: locked. in the middle: mutation.
 
 ---
 
-## building
+## menu
 
-docker desktop on mac or windows. docker engine on linux. the cross-compiler lives inside.
+jog wheel scrolls. jog click selects or toggles edit mode. back button returns to main menu.
 
-```bash
-./scripts/build.sh
-```
+### lfo
 
-output lands in `dist/kwahzolin-module.tar.gz`
+three lfos. each targets any of the 8 knob parameters at audio-rate resolution. shift + jog switches between lfo 1 / 2 / 3.
 
-if you already have `aarch64-linux-gnu-gcc` on your machine:
+| property | range |
+|----------|-------|
+| shape    | triangle / sine / square / sawtooth / s&h / wander |
+| rate     | 0.05 hz – 100 hz |
+| amount   | 0.0 – 1.0 |
+| target   | any of the 8 knobs |
 
-```bash
-CROSS_PREFIX=aarch64-linux-gnu- ./scripts/build.sh
-```
+### distortion
+
+distortion applied after the filter. toggle on/off independently of type and amount.
+
+| type       | character |
+|------------|-----------|
+| overdrive  | soft tanh saturation, warm and tube-like |
+| distortion | hard knee clipping, more aggressive |
+| fuzz       | asymmetric hard clip, even harmonics, octave character |
+
+### module
+
+**swap module** — returns to the schwung module picker.  
+**unload module** — unloads kwahzolin.
 
 ---
 
 ## installing
 
-```bash
-./scripts/install.sh
-# or specify the move's ip:
-MOVE_HOST=192.168.x.y ./scripts/install.sh
-```
-
-the module goes to `/data/UserData/schwung/modules/sound_generators/kwahzolin/` on the device.
+install via the schwung web interface.
 
 ---
 
-v0.1.8
+## building from source
+
+requires `aarch64-linux-gnu-gcc`
+
+```bash
+./scripts/build.sh
+```
+
+or
+
+```bash
+CROSS_PREFIX=aarch64-linux-gnu- ./scripts/build.sh
+```
+
+output: `dist/kwahzolin-module.tar.gz`
+
+---
+
+v0.2.0
