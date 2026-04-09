@@ -55,7 +55,7 @@ a benjolin-inspired synthesizer module for the ableton move unofficial firmware 
 
 **filter chaos** — the rungler latches a new value on each osc 2 clock tick and holds it until the next.
 
-**loop** — turing machine style register control. at zero tm is fully random. at one tm is fully locked. in the middle tm slowly mutates.
+**loop** — turing machine style register control.
 
 ---
 
