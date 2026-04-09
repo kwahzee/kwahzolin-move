@@ -24,9 +24,13 @@ a benjolin-inspired synthesizer module for the ableton move unofficial firmware 
 ---
 
 ```
-    [osc1] ──▶ pulse ──▶ XOR ──▶ ring mix ──▶ [svf filter] ──▶ [distortion] ──▶ out
-    [osc2] ──▶ pulse ──┘    └──▶ osc1×osc2         ▲
-                                               rungler cv + lfo
+    [osc1] ──▶ pulse ──▶ XOR ──▶ [svf filter] ──▶ [distortion] ──▶ out
+    [osc2] ──▶ pulse ──┘              ▲
+                                 rungler cv + lfo
+
+    cross mod: osc2 triangle ──▶ osc1 freq offset
+               osc1 triangle ──▶ osc2 freq offset
+               (bidirectional, previous-sample values)
 ```
 
 ---
@@ -38,7 +42,7 @@ a benjolin-inspired synthesizer module for the ableton move unofficial firmware 
     │  1  │ │  2  │ │  3  │ │  4  │ │  5  │ │  6  │ │  7  │ │  8  │
     └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘
        │       │       │       │       │       │       │       │
-      osc1    osc2    osc    filter  filter  filter   ring    loop
+      osc1    osc2    osc    filter  filter  filter  cross    loop
       freq    freq   chaos   cutoff  reson   chaos    mod
 ```
 
@@ -54,7 +58,7 @@ a benjolin-inspired synthesizer module for the ableton move unofficial firmware 
 
 **filter chaos** — scales how far the rungler throws the cutoff on each clock tick.
 
-**ring modulation** — crossfades between the xor pulse signal and true ring mod (osc1 × osc2).
+**cross mod** — bidirectional FM between the two oscillators. each oscillator's frequency is offset by the other's triangle output. at low amounts: subtle detuning and beating. at high amounts: harsh inharmonic FM feedback that interacts with the rungler chaos.
 
 **loop** — turing machine register control. at zero: random. at one: locked. in the middle: mutation.
 
@@ -85,10 +89,14 @@ distortion applied after the filter. toggle on/off independently of type and amo
 | distortion | hard knee clipping, more aggressive |
 | fuzz       | asymmetric hard clip, even harmonics, octave character |
 
-### module
+| property | range | notes |
+|----------|-------|-------|
+| type     | overdrive / distortion / fuzz | |
+| amount   | 0.0 – 1.0 | drive amount |
+| mix      | 0.0 – 1.0 | wet/dry blend |
+| on/off   | toggle | |
 
-**swap module** — returns to the schwung module picker.  
-**unload module** — unloads kwahzolin.
+output level compensation is applied automatically per distortion type so activating distortion does not increase loudness.
 
 ---
 
@@ -116,4 +124,4 @@ output: `dist/kwahzolin-module.tar.gz`
 
 ---
 
-v0.2.1
+v0.2.2

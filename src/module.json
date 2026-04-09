@@ -2,7 +2,7 @@
   "id": "kwahzolin",
   "name": "Kwahzolin",
   "abbrev": "KW",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "api_version": 2,
   "capabilities": {
     "chainable": true,
@@ -19,7 +19,7 @@
             "filter_cutoff",
             "filter_resonance",
             "filter_chaos",
-            "ring_mod",
+            "cross_mod",
             "loop"
           ],
           "params": [
@@ -29,7 +29,7 @@
             { "key": "filter_cutoff",     "label": "Filter Cutoff"    },
             { "key": "filter_resonance",  "label": "Filter Resonance" },
             { "key": "filter_chaos",      "label": "Filter Chaos"     },
-            { "key": "ring_mod",          "label": "Ring Modulation"  },
+            { "key": "cross_mod",         "label": "Cross Mod"        },
             { "key": "loop",              "label": "Loop"             }
           ]
         }
