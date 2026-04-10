@@ -2,7 +2,7 @@
   "id": "kwahzolin",
   "name": "Kwahzolin",
   "abbrev": "KW",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "api_version": 2,
   "capabilities": {
     "chainable": true,
@@ -30,11 +30,7 @@
             { "key": "filter_resonance",  "label": "Filter Resonance" },
             { "key": "filter_chaos",      "label": "Filter Chaos"     },
             { "key": "cross_mod",         "label": "Cross Mod"        },
-            { "key": "loop",              "label": "Loop"             },
-            { "key": "reverb_on",         "label": "Reverb On"        },
-            { "key": "reverb_decay",      "label": "Reverb Decay"     },
-            { "key": "reverb_tone",       "label": "Reverb Tone"      },
-            { "key": "reverb_mix",        "label": "Reverb Mix"       }
+            { "key": "loop",              "label": "Loop"             }
           ]
         }
       }
