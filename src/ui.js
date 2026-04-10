@@ -14,6 +14,7 @@ const STATE_LFO_SELECT   = 1;
 const STATE_LFO_SETTINGS = 2;
 const STATE_DISTORTION   = 3;
 const STATE_KNOB_DISPLAY = 4;
+const STATE_REVERB       = 5;
 
 const LFO_SHAPES  = ['Triangle', 'Sine', 'Square', 'Sawtooth', 'Random'];
 const LFO_TARGETS = [
@@ -54,7 +55,7 @@ const CHAR_GAP   = 2;
 const TITLE_W    = TITLE_STR.length * CHAR_W + (TITLE_STR.length - 1) * CHAR_GAP;
 const TITLE_X    = Math.floor((128 - TITLE_W) / 2);
 
-const knobValues = [0, 0, 0, 0, 0, 0, 0, 0];
+const knobValues = [49, 58, 0, 78, 0, 0, 0, 0];
 
 const lfoSettings = [
     { shape: 0, rate: 0.5, amount: 0.0, target: 3 },
@@ -67,6 +68,11 @@ let distType    = 1;
 let distAmount  = 0.0;
 let distMix     = 1.0;
 
+let reverbOn    = false;
+let reverbDecay = 0.6;
+let reverbTone  = 0.5;
+let reverbMix   = 0.5;
+
 let menuState         = STATE_MAIN;
 let prevMenuState     = STATE_MAIN;
 let mainCursor        = 0;
@@ -74,6 +80,7 @@ let lfoSelectCursor   = 0;
 let activeLfo         = 0;
 let lfoSettingsCursor = 0;
 let distCursor        = 0;
+let reverbCursor      = 0;
 let editMode          = false;
 let activeKnob        = -1;
 let knobTicks         = 0;
@@ -99,6 +106,13 @@ function sendDistParams() {
     host_module_set_param('dist_mix',    distMix.toFixed(4));
 }
 
+function sendReverbParams() {
+    host_module_set_param('reverb_on',    reverbOn ? '1' : '0');
+    host_module_set_param('reverb_decay', reverbDecay.toFixed(4));
+    host_module_set_param('reverb_tone',  reverbTone.toFixed(4));
+    host_module_set_param('reverb_mix',   reverbMix.toFixed(4));
+}
+
 function saveState() {
     const s = {
         lfo: lfoSettings.map(l => ({ rate: l.rate, amount: l.amount, shape: l.shape, target: l.target })),
@@ -106,6 +120,10 @@ function saveState() {
         distType,
         distAmount,
         distMix,
+        reverbOn,
+        reverbDecay,
+        reverbTone,
+        reverbMix,
     };
     host_write_file(STATE_FILE, JSON.stringify(s));
 }
@@ -128,6 +146,10 @@ function restoreState() {
         if (typeof s.distType    === 'number')  distType    = Math.max(1, Math.min(3, s.distType|0));
         if (typeof s.distAmount  === 'number')  distAmount  = Math.max(0, Math.min(1, s.distAmount));
         if (typeof s.distMix     === 'number')  distMix     = Math.max(0, Math.min(1, s.distMix));
+        if (typeof s.reverbOn    === 'boolean') reverbOn    = s.reverbOn;
+        if (typeof s.reverbDecay === 'number')  reverbDecay = Math.max(0, Math.min(1, s.reverbDecay));
+        if (typeof s.reverbTone  === 'number')  reverbTone  = Math.max(0, Math.min(1, s.reverbTone));
+        if (typeof s.reverbMix   === 'number')  reverbMix   = Math.max(0, Math.min(1, s.reverbMix));
     } catch (e) {}
 }
 
@@ -158,13 +180,24 @@ function editDistProp(dir) {
     displayDirty = true;
 }
 
+function editReverbProp(dir) {
+    switch (reverbCursor) {
+        case 1: reverbDecay = clampF(Math.round((reverbDecay + dir * 0.05) * 100) / 100, 0.0, 1.0); break;
+        case 2: reverbTone  = clampF(Math.round((reverbTone  + dir * 0.05) * 100) / 100, 0.0, 1.0); break;
+        case 3: reverbMix   = clampF(Math.round((reverbMix   + dir * 0.05) * 100) / 100, 0.0, 1.0); break;
+    }
+    sendReverbParams();
+    saveState();
+    displayDirty = true;
+}
+
 function handleJog(delta) {
     const dir = delta > 0 ? 1 : -1;
 
     if (menuState === STATE_KNOB_DISPLAY) return;
 
     if (menuState === STATE_MAIN) {
-        mainCursor = (mainCursor + dir + 2) % 2;
+        mainCursor = (mainCursor + dir + 3) % 3;
         displayDirty = true;
         return;
     }
@@ -194,6 +227,16 @@ function handleJog(delta) {
         }
         return;
     }
+
+    if (menuState === STATE_REVERB) {
+        if (editMode && reverbCursor > 0) {
+            editReverbProp(dir);
+        } else {
+            reverbCursor = (reverbCursor + dir + 4) % 4;
+            displayDirty = true;
+        }
+        return;
+    }
 }
 
 function handleClick() {
@@ -203,9 +246,13 @@ function handleClick() {
         if (mainCursor === 0) {
             menuState = STATE_LFO_SELECT;
             lfoSelectCursor = 0;
-        } else {
+        } else if (mainCursor === 1) {
             menuState = STATE_DISTORTION;
             distCursor = 0;
+            editMode = false;
+        } else {
+            menuState = STATE_REVERB;
+            reverbCursor = 0;
             editMode = false;
         }
         displayDirty = true;
@@ -252,6 +299,18 @@ function handleClick() {
         displayDirty = true;
         return;
     }
+
+    if (menuState === STATE_REVERB) {
+        if (reverbCursor === 0) {
+            reverbOn = !reverbOn;
+            sendReverbParams();
+            saveState();
+        } else {
+            editMode = !editMode;
+        }
+        displayDirty = true;
+        return;
+    }
 }
 
 function handleBack() {
@@ -267,7 +326,7 @@ function handleBack() {
         return;
     }
 
-    if (menuState === STATE_LFO_SELECT || menuState === STATE_DISTORTION) {
+    if (menuState === STATE_LFO_SELECT || menuState === STATE_DISTORTION || menuState === STATE_REVERB) {
         menuState = STATE_MAIN;
         displayDirty = true;
         return;
@@ -308,9 +367,9 @@ function drawMain() {
     clear_screen();
     drawTitle();
     drawSeparator(16);
-    const items = ['LFO', 'DISTORTION'];
+    const items = ['LFO', 'DISTORTION', 'REVERBERATION'];
     for (let i = 0; i < items.length; i++) {
-        const y = 22 + i * 16;
+        const y = 20 + i * 14;
         if (i === mainCursor) print(2, y, '>', 1);
         print(12, y, items[i], 1);
     }
@@ -369,6 +428,25 @@ function drawDistortion() {
     }
 }
 
+function drawReverb() {
+    clear_screen();
+    print(2, 1, 'REVERBERATION', 1);
+    drawSeparator(11);
+    const rows = [
+        `ON/OFF: ${reverbOn ? 'ON ' : 'OFF'}`,
+        `DECAY:  ${reverbDecay.toFixed(2)}`,
+        `TONE:   ${reverbTone.toFixed(2)}`,
+        `MIX:    ${reverbMix.toFixed(2)}`,
+    ];
+    for (let i = 0; i < rows.length; i++) {
+        const y = 14 + i * 12;
+        if (i === reverbCursor) {
+            print(2, y, (editMode && i > 0) ? '*' : '>', 1);
+        }
+        print(12, y, rows[i], 1);
+    }
+}
+
 function drawKnobDisplay() {
     clear_screen();
     if (activeKnob < 0) return;
@@ -394,6 +472,7 @@ function drawCurrentState() {
         case STATE_LFO_SETTINGS: drawLfoSettings();  break;
         case STATE_DISTORTION:   drawDistortion();   break;
         case STATE_KNOB_DISPLAY: drawKnobDisplay();  break;
+        case STATE_REVERB:       drawReverb();       break;
     }
 }
 
@@ -402,6 +481,7 @@ globalThis.init = function () {
     for (let i = 0; i < KNOB_COUNT; i++) sendKnobParam(i);
     for (let i = 0; i < 3; i++) sendLfoParams(i);
     sendDistParams();
+    sendReverbParams();
     displayDirty = true;
 };
 
