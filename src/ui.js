@@ -118,7 +118,7 @@ function restoreState() {
         if (s.lfo && Array.isArray(s.lfo)) {
             for (let i = 0; i < 3 && i < s.lfo.length; i++) {
                 const src = s.lfo[i];
-                if (typeof src.rate   === 'number') lfoSettings[i].rate   = Math.max(0.05, Math.min(10000.0, src.rate));
+                if (typeof src.rate   === 'number') lfoSettings[i].rate   = Math.max(0.05, Math.min(100.0, src.rate));
                 if (typeof src.amount === 'number') lfoSettings[i].amount = Math.max(0, Math.min(1, src.amount));
                 if (typeof src.shape  === 'number') lfoSettings[i].shape  = Math.max(0, Math.min(4, src.shape|0));
                 if (typeof src.target === 'number') lfoSettings[i].target = Math.max(0, Math.min(7, src.target|0));
@@ -138,7 +138,7 @@ function editLfoProp(dir) {
     const L = lfoSettings[activeLfo];
     switch (lfoSettingsCursor) {
         case 0: L.shape  = clampI(L.shape + dir, 0, LFO_SHAPES.length - 1); break;
-        case 1: L.rate   = clampF(L.rate * (dir > 0 ? 1.12 : 0.893), 0.05, 10000.0); break;
+        case 1: L.rate   = clampF(L.rate * (dir > 0 ? 1.12 : 0.893), 0.05, 100.0); break;
         case 2: L.amount = clampF(Math.round((L.amount + dir * 0.05) * 100) / 100, 0.0, 1.0); break;
         case 3: L.target = clampI(L.target + dir, 0, LFO_TARGETS.length - 1); break;
     }
