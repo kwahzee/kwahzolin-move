@@ -232,7 +232,7 @@ static void kwahzolin_set_param(void *inst, const char *key, const char *val) {
         int idx = parse_lfo_prefix(key, &suffix);
         if (idx >= 0) {
             if (!strcmp(suffix, "rate")) {
-                k->lfo[idx].rate = clampf(f, 0.05f, 100.0f);
+                k->lfo[idx].rate = clampf(f, 0.05f, 10000.0f);
             } else if (!strcmp(suffix, "amount")) {
                 k->lfo[idx].amount = clampf(f, 0.0f, 1.0f);
             } else if (!strcmp(suffix, "shape")) {
@@ -273,21 +273,21 @@ static int kwahzolin_get_param(void *inst, const char *key, char *buf, int buf_l
         static const char *cp =
             "["
             "{\"key\":\"osc1_freq\",\"name\":\"Osc 1 Frequency\","
-                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.386},"
+                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01},"
             "{\"key\":\"osc2_freq\",\"name\":\"Osc 2 Frequency\","
-                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.456},"
+                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01},"
             "{\"key\":\"osc_chaos\",\"name\":\"Osc Chaos\","
-                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.0},"
+                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01},"
             "{\"key\":\"filter_cutoff\",\"name\":\"Filter Cutoff\","
-                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.616},"
+                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01},"
             "{\"key\":\"filter_resonance\",\"name\":\"Filter Resonance\","
-                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.0},"
+                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01},"
             "{\"key\":\"filter_chaos\",\"name\":\"Filter Chaos\","
-                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.0},"
+                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01},"
             "{\"key\":\"cross_mod\",\"name\":\"Cross Mod\","
-                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.0},"
+                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01},"
             "{\"key\":\"loop\",\"name\":\"Loop\","
-                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01,\"default\":0.0}"
+                "\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01}"
             "]";
         int n = (int)strlen(cp);
         if (n >= buf_len) n = buf_len - 1;

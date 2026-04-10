@@ -33,7 +33,6 @@ const KNOB_NAMES = [
     'Osc 1 Frequency', 'Osc 2 Frequency', 'Osc Chaos',    'Filter Cutoff',
     'Filter Resonance', 'Filter Chaos',   'Cross Mod', 'Loop'
 ];
-const KNOB_DEFAULTS = [49, 58, 0, 78, 0, 0, 0, 0];
 
 const STATE_FILE = '/data/UserData/schwung/modules/sound_generators/kwahzolin/state.json';
 
@@ -55,7 +54,7 @@ const CHAR_GAP   = 2;
 const TITLE_W    = TITLE_STR.length * CHAR_W + (TITLE_STR.length - 1) * CHAR_GAP;
 const TITLE_X    = Math.floor((128 - TITLE_W) / 2);
 
-const knobValues = [...KNOB_DEFAULTS];
+const knobValues = [0, 0, 0, 0, 0, 0, 0, 0];
 
 const lfoSettings = [
     { shape: 0, rate: 0.5, amount: 0.0, target: 3 },
@@ -119,7 +118,7 @@ function restoreState() {
         if (s.lfo && Array.isArray(s.lfo)) {
             for (let i = 0; i < 3 && i < s.lfo.length; i++) {
                 const src = s.lfo[i];
-                if (typeof src.rate   === 'number') lfoSettings[i].rate   = Math.max(0.05, Math.min(10.0, src.rate));
+                if (typeof src.rate   === 'number') lfoSettings[i].rate   = Math.max(0.05, Math.min(10000.0, src.rate));
                 if (typeof src.amount === 'number') lfoSettings[i].amount = Math.max(0, Math.min(1, src.amount));
                 if (typeof src.shape  === 'number') lfoSettings[i].shape  = Math.max(0, Math.min(4, src.shape|0));
                 if (typeof src.target === 'number') lfoSettings[i].target = Math.max(0, Math.min(7, src.target|0));
@@ -139,7 +138,7 @@ function editLfoProp(dir) {
     const L = lfoSettings[activeLfo];
     switch (lfoSettingsCursor) {
         case 0: L.shape  = clampI(L.shape + dir, 0, LFO_SHAPES.length - 1); break;
-        case 1: L.rate   = clampF(L.rate * (dir > 0 ? 1.12 : 0.893), 0.05, 10.0); break;
+        case 1: L.rate   = clampF(L.rate * (dir > 0 ? 1.12 : 0.893), 0.05, 10000.0); break;
         case 2: L.amount = clampF(Math.round((L.amount + dir * 0.05) * 100) / 100, 0.0, 1.0); break;
         case 3: L.target = clampI(L.target + dir, 0, LFO_TARGETS.length - 1); break;
     }
@@ -171,7 +170,7 @@ function handleJog(delta) {
     }
 
     if (menuState === STATE_LFO_SELECT) {
-        lfoSelectCursor = (lfoSelectCursor + dir + 3) % 3;
+        lfoSelectCursor = (lfoSelectCursor + dir + 4) % 4;
         displayDirty = true;
         return;
     }
@@ -180,7 +179,7 @@ function handleJog(delta) {
         if (editMode) {
             editLfoProp(dir);
         } else {
-            lfoSettingsCursor = (lfoSettingsCursor + dir + LFO_PROPS.length) % LFO_PROPS.length;
+            lfoSettingsCursor = (lfoSettingsCursor + dir + 5) % 5;
             displayDirty = true;
         }
         return;
@@ -190,7 +189,7 @@ function handleJog(delta) {
         if (editMode && distCursor < 3) {
             editDistProp(dir);
         } else {
-            distCursor = (distCursor + dir + 4) % 4;
+            distCursor = (distCursor + dir + 5) % 5;
             displayDirty = true;
         }
         return;
@@ -214,22 +213,36 @@ function handleClick() {
     }
 
     if (menuState === STATE_LFO_SELECT) {
-        activeLfo = lfoSelectCursor;
-        menuState = STATE_LFO_SETTINGS;
-        lfoSettingsCursor = 0;
-        editMode = false;
+        if (lfoSelectCursor === 3) {
+            menuState = STATE_MAIN;
+        } else {
+            activeLfo = lfoSelectCursor;
+            menuState = STATE_LFO_SETTINGS;
+            lfoSettingsCursor = 0;
+            editMode = false;
+        }
         displayDirty = true;
         return;
     }
 
     if (menuState === STATE_LFO_SETTINGS) {
-        editMode = !editMode;
+        if (lfoSettingsCursor === 4) {
+            if (editMode) {
+                editMode = false;
+            } else {
+                menuState = STATE_LFO_SELECT;
+            }
+        } else {
+            editMode = !editMode;
+        }
         displayDirty = true;
         return;
     }
 
     if (menuState === STATE_DISTORTION) {
-        if (distCursor === 3) {
+        if (distCursor === 4) {
+            menuState = STATE_MAIN;
+        } else if (distCursor === 3) {
             distEnabled = !distEnabled;
             sendDistParams();
             saveState();
@@ -285,6 +298,12 @@ function drawSeparator(y) {
     fill_rect(0, y, 128, 1, 1);
 }
 
+function formatRate(r) {
+    if (r < 10)  return `${r.toFixed(2)} Hz`;
+    if (r < 100) return `${r.toFixed(1)} Hz`;
+    return `${Math.round(r)} Hz`;
+}
+
 function drawMain() {
     clear_screen();
     drawTitle();
@@ -301,10 +320,11 @@ function drawLfoSelect() {
     clear_screen();
     print(2, 1, 'LFO', 1);
     drawSeparator(11);
-    for (let i = 0; i < 3; i++) {
-        const y = 14 + i * 14;
+    const items = ['LFO 1', 'LFO 2', 'LFO 3', 'BACK'];
+    for (let i = 0; i < items.length; i++) {
+        const y = 14 + i * 13;
         if (i === lfoSelectCursor) print(2, y, '>', 1);
-        print(12, y, `LFO ${i + 1}`, 1);
+        print(12, y, items[i], 1);
     }
 }
 
@@ -313,16 +333,19 @@ function drawLfoSettings() {
     print(2, 1, `LFO ${activeLfo + 1}`, 1);
     drawSeparator(11);
     const L = lfoSettings[activeLfo];
-    const vals = [
-        LFO_SHAPES[L.shape],
-        `${L.rate.toFixed(2)} Hz`,
-        L.amount.toFixed(2),
-        LFO_TARGETS[L.target],
+    const rows = [
+        `${LFO_PROPS[0]}: ${LFO_SHAPES[L.shape]}`,
+        `${LFO_PROPS[1]}: ${formatRate(L.rate)}`,
+        `${LFO_PROPS[2]}: ${L.amount.toFixed(2)}`,
+        `${LFO_PROPS[3]}: ${LFO_TARGETS[L.target]}`,
+        'BACK',
     ];
-    for (let i = 0; i < LFO_PROPS.length; i++) {
-        const y = 14 + i * 12;
-        if (i === lfoSettingsCursor) print(2, y, editMode ? '*' : '>', 1);
-        print(12, y, `${LFO_PROPS[i]}: ${vals[i]}`, 1);
+    for (let i = 0; i < rows.length; i++) {
+        const y = 14 + i * 10;
+        if (i === lfoSettingsCursor) {
+            print(2, y, (editMode && i < 4) ? '*' : '>', 1);
+        }
+        print(12, y, rows[i], 1);
     }
 }
 
@@ -335,10 +358,13 @@ function drawDistortion() {
         `AMOUNT: ${distAmount.toFixed(2)}`,
         `MIX:    ${distMix.toFixed(2)}`,
         distEnabled ? '[ ON  ]' : '[ OFF ]',
+        'BACK',
     ];
     for (let i = 0; i < rows.length; i++) {
-        const y = 14 + i * 12;
-        if (i === distCursor) print(2, y, (editMode && i < 3) ? '*' : '>', 1);
+        const y = 14 + i * 10;
+        if (i === distCursor) {
+            print(2, y, (editMode && i < 3) ? '*' : '>', 1);
+        }
         print(12, y, rows[i], 1);
     }
 }
